@@ -75,6 +75,11 @@
         "command": "comment-tracker.exportToMarkdown",
         "title": "Comment Tracker: Export Comments to Markdown"
       }
+      ,
+      {
+        "command": "comment-tracker.deleteAllComments",
+        "title": "Comment Tracker: Delete All Comments"
+      }
     ],
     "menus": {
       "editor/context": [

@@ -224,7 +224,14 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
-  context.subscriptions.push(addCommentCmd, viewCommentsCmd, deleteCommentCmd, deleteCommentThreadCmd, replyToCommentCmd, resolveCommentThreadCmd, unresolveCommentThreadCmd, deleteReplyCmd, navigateToCommentCmd, exportToMarkdownCmd);
+  const deleteAllCmd = vscode.commands.registerCommand(
+    'comment-tracker.deleteAllComments',
+    async () => {
+      await deleteAllComments();
+    }
+  );
+
+  context.subscriptions.push(addCommentCmd, viewCommentsCmd, deleteCommentCmd, deleteCommentThreadCmd, replyToCommentCmd, resolveCommentThreadCmd, unresolveCommentThreadCmd, deleteReplyCmd, navigateToCommentCmd, exportToMarkdownCmd, deleteAllCmd);
 }
 
 class CommentsTreeProvider implements vscode.TreeDataProvider<CommentTreeItem> {
@@ -530,6 +537,52 @@ async function deleteComment() {
     saveComments();
     vscode.window.showInformationMessage('Comment deleted');
   }
+}
+
+async function deleteAllComments() {
+  const confirm = await vscode.window.showWarningMessage(
+    'Delete ALL comments for this workspace?',
+    { modal: true },
+    'Delete'
+  );
+  if (confirm !== 'Delete') {
+    return;
+  }
+
+  // Dispose existing threads
+  for (const [, thread] of commentThreads) {
+    try { thread.dispose(); } catch (e) { /* ignore */ }
+  }
+  commentThreads.clear();
+
+  // Clear in-memory store
+  commentStore.comments = [];
+
+  // Remove storage file if present
+  const filePath = getCommentsFilePath(false);
+  if (filePath && fs.existsSync(filePath)) {
+    try {
+      fs.unlinkSync(filePath);
+      const dir = path.dirname(filePath);
+      // remove dir if empty
+      try {
+        const files = fs.readdirSync(dir).filter(f => f !== '.');
+        if (files.length === 0) {
+          fs.rmdirSync(dir);
+        }
+      } catch (e) {
+        // ignore
+      }
+    } catch (err) {
+      console.error('Failed to remove comments file', err);
+    }
+  }
+
+  if (commentsTreeProvider) {
+    commentsTreeProvider.refresh();
+  }
+
+  vscode.window.showInformationMessage('All comments deleted');
 }
 
 async function deleteCommentThread(thread: vscode.CommentThread) {
