@@ -884,23 +884,35 @@ function restoreCommentThreads() {
   }
 }
 
-function getCommentsFilePath(): string | undefined {
+function getCommentsFilePath(createIfMissing = false): string | undefined {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceFolder) {
     return undefined;
   }
 
-  const vscodeDir = path.join(workspaceFolder.uri.fsPath, '.comments');
-  if (!fs.existsSync(vscodeDir)) {
-    fs.mkdirSync(vscodeDir, { recursive: true });
+  const commentsDir = path.join(workspaceFolder.uri.fsPath, '.comments');
+  const filePath = path.join(commentsDir, 'collab-comments.json');
+
+  if (createIfMissing) {
+    if (!fs.existsSync(commentsDir)) {
+      fs.mkdirSync(commentsDir, { recursive: true });
+    }
+    if (!fs.existsSync(filePath)) {
+      try {
+        fs.writeFileSync(filePath, JSON.stringify({ comments: [] }, null, 2), 'utf8');
+      } catch (error) {
+        console.error('Failed to create comments file:', error);
+      }
+    }
   }
 
-  return path.join(vscodeDir, 'collab-comments.json');
+  return filePath;
 }
 
 function loadComments() {
   const filePath = getCommentsFilePath();
   if (!filePath || !fs.existsSync(filePath)) {
+    // Do not create the directory or file when loading — only load if already present
     return;
   }
 
@@ -913,7 +925,7 @@ function loadComments() {
 }
 
 function saveComments() {
-  const filePath = getCommentsFilePath();
+  const filePath = getCommentsFilePath(true); // create dir/file if missing
   if (!filePath) {
     vscode.window.showErrorMessage('No workspace folder found');
     return;
