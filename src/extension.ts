@@ -12,6 +12,11 @@ interface CommentData {
     start: { line: number; character: number };
     end: { line: number; character: number };
   };
+  // The exact selected text that was commented on (used for re-anchoring)
+  selectedText?: string;
+  // Small context snippets around the selected text to help fuzzy matching
+  contextBefore?: string;
+  contextAfter?: string;
   replies?: Array<{
     id: string;
     author: string;
@@ -412,6 +417,25 @@ async function addComment() {
       start: { line: range.start.line, character: range.start.character },
       end: { line: range.end.line, character: range.end.character }
     },
+    selectedText: editor.document.getText(range),
+    contextBefore: (() => {
+      try {
+        const startOffset = editor.document.offsetAt(range.start);
+        const beforeStart = Math.max(0, startOffset - 30);
+        return editor.document.getText(new vscode.Range(editor.document.positionAt(beforeStart), range.start));
+      } catch (e) {
+        return undefined;
+      }
+    })(),
+    contextAfter: (() => {
+      try {
+        const endOffset = editor.document.offsetAt(range.end);
+        const afterEnd = Math.min(editor.document.getText().length, endOffset + 30);
+        return editor.document.getText(new vscode.Range(range.end, editor.document.positionAt(afterEnd)));
+      } catch (e) {
+        return undefined;
+      }
+    })(),
     replies: [],
     resolved: false
   };
@@ -717,6 +741,31 @@ async function replyToComment(reply: vscode.CommentReply) {
         start: { line: range.start.line, character: range.start.character },
         end: { line: range.end.line, character: range.end.character }
       },
+      selectedText: (() => {
+        try {
+          return document.getText(range);
+        } catch (e) {
+          return undefined;
+        }
+      })(),
+      contextBefore: (() => {
+        try {
+          const startOffset = document.offsetAt(range.start);
+          const beforeStart = Math.max(0, startOffset - 30);
+          return document.getText(new vscode.Range(document.positionAt(beforeStart), range.start));
+        } catch (e) {
+          return undefined;
+        }
+      })(),
+      contextAfter: (() => {
+        try {
+          const endOffset = document.offsetAt(range.end);
+          const afterEnd = Math.min(document.getText().length, endOffset + 30);
+          return document.getText(new vscode.Range(range.end, document.positionAt(afterEnd)));
+        } catch (e) {
+          return undefined;
+        }
+      })(),
       replies: [],
       resolved: false
     };
@@ -830,8 +879,8 @@ function updateCommentPositionsFromEdits(event: vscode.TextDocumentChangeEvent) 
   }, 500);
 }
 
-function restoreCommentThreads() {
-  // Restore comment threads from stored data
+async function restoreCommentThreads() {
+  // Restore comment threads from stored data, attempting to re-anchor by text when possible
   for (const commentData of commentStore.comments) {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
@@ -839,48 +888,90 @@ function restoreCommentThreads() {
     }
 
     const uri = vscode.Uri.joinPath(workspaceFolder.uri, commentData.filePath);
-    const range = new vscode.Range(
-      commentData.range.start.line,
-      commentData.range.start.character,
-      commentData.range.end.line,
-      commentData.range.end.character
-    );
 
-    const thread = commentController.createCommentThread(uri, range, []);
+    let range: vscode.Range | undefined;
 
-    const vsComment: vscode.Comment = {
-      body: new vscode.MarkdownString(`${new Date(commentData.timestamp).toLocaleString()}\n\n${commentData.text}`),
-      mode: vscode.CommentMode.Preview,
-      author: {
-        name: commentData.resolved ? `RESOLVED - ${commentData.author}` : commentData.author
+    try {
+      const document = await vscode.workspace.openTextDocument(uri);
+
+      // Try to find the exact selected text first
+      if (commentData.selectedText && commentData.selectedText.length > 0) {
+        const fullText = document.getText();
+        let idx = fullText.indexOf(commentData.selectedText);
+
+        if (idx === -1 && commentData.contextBefore !== undefined && commentData.contextAfter !== undefined) {
+          // Try searching for context+selectedText
+          const combined = `${commentData.contextBefore}${commentData.selectedText}${commentData.contextAfter}`;
+          idx = fullText.indexOf(commentData.selectedText);
+        }
+
+        if (idx !== -1) {
+          const startPos = document.positionAt(idx);
+          const endPos = document.positionAt(idx + commentData.selectedText.length);
+          range = new vscode.Range(startPos, endPos);
+        } else {
+          // Try line-based search as a fallback
+          for (let i = 0; i < document.lineCount; i++) {
+            const line = document.lineAt(i).text;
+            const posInLine = line.indexOf(commentData.selectedText || '');
+            if (posInLine !== -1) {
+              range = new vscode.Range(new vscode.Position(i, posInLine), new vscode.Position(i, posInLine + (commentData.selectedText || '').length));
+              break;
+            }
+          }
+        }
       }
-    };
 
-    // Build array of all comments (original + replies)
-    const allComments = [vsComment];
-
-    // Add replies if they exist
-    if (commentData.replies && commentData.replies.length > 0) {
-      for (const reply of commentData.replies) {
-        const replyComment: vscode.Comment = {
-          body: new vscode.MarkdownString(`└─ ${new Date(reply.timestamp).toLocaleString()}\n\n${reply.text}`),
-          mode: vscode.CommentMode.Preview,
-          author: {
-            name: reply.author
-          },
-          contextValue: reply.id || `${commentData.id}-reply-${reply.timestamp}`
-        };
-        allComments.push(replyComment);
+      // If we couldn't locate by text, fall back to stored numeric range (clamped)
+      if (!range) {
+        const maxLine = Math.max(0, Math.min(document.lineCount - 1, commentData.range.start.line));
+        const maxEndLine = Math.max(0, Math.min(document.lineCount - 1, commentData.range.end.line));
+        range = new vscode.Range(
+          new vscode.Position(maxLine, Math.max(0, commentData.range.start.character)),
+          new vscode.Position(maxEndLine, Math.max(0, commentData.range.end.character))
+        );
       }
+
+      const thread = commentController.createCommentThread(uri, range, []);
+
+      const vsComment: vscode.Comment = {
+        body: new vscode.MarkdownString(`${new Date(commentData.timestamp).toLocaleString()}\n\n${commentData.text}`),
+        mode: vscode.CommentMode.Preview,
+        author: {
+          name: commentData.resolved ? `RESOLVED - ${commentData.author}` : commentData.author
+        }
+      };
+
+      // Build array of all comments (original + replies)
+      const allComments = [vsComment];
+
+      // Add replies if they exist
+      if (commentData.replies && commentData.replies.length > 0) {
+        for (const reply of commentData.replies) {
+          const replyComment: vscode.Comment = {
+            body: new vscode.MarkdownString(`└─ ${new Date(reply.timestamp).toLocaleString()}\n\n${reply.text}`),
+            mode: vscode.CommentMode.Preview,
+            author: {
+              name: reply.author
+            },
+            contextValue: reply.id || `${commentData.id}-reply-${reply.timestamp}`
+          };
+          allComments.push(replyComment);
+        }
+      }
+
+      thread.comments = allComments;
+      thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+      thread.contextValue = commentData.id;
+      thread.canReply = true;
+      thread.state = commentData.resolved ? vscode.CommentThreadState.Resolved : vscode.CommentThreadState.Unresolved;
+
+      commentThreads.set(commentData.id, thread);
+    } catch (err) {
+      // If file can't be opened, skip re-anchoring for now
+      console.error('Failed to restore thread for', commentData.filePath, err);
+      continue;
     }
-
-    thread.comments = allComments;
-    thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
-    thread.contextValue = commentData.id;
-    thread.canReply = true;
-    thread.state = commentData.resolved ? vscode.CommentThreadState.Resolved : vscode.CommentThreadState.Unresolved;
-
-    commentThreads.set(commentData.id, thread);
   }
 }
 
