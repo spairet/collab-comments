@@ -56,7 +56,7 @@
       {
         "command": "comment-tracker.unresolveCommentThread",
         "title": "Unresolve",
-        "icon": "$(issues)"
+        "icon": "$(close)"
       },
       {
         "command": "comment-tracker.mergeTrackedChanges",
@@ -84,6 +84,26 @@
         "command": "comment-tracker.openReviewPanel",
         "title": "Comment Tracker: Open Review Panel",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "comment-tracker.showResolvedComments",
+        "title": "Show Resolved Comments",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "comment-tracker.hideResolvedComments",
+        "title": "Hide Resolved Comments",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "comment-tracker.resolveTreeComment",
+        "title": "Resolve Comment",
+        "icon": "$(check)"
+      },
+      {
+        "command": "comment-tracker.unresolveTreeComment",
+        "title": "Unresolve Comment",
+        "icon": "$(close)"
       }
     ],
     "menus": {
@@ -97,17 +117,22 @@
         {
           "command": "comment-tracker.resolveCommentThread",
           "group": "inline@1",
-          "when": "commentController == comment-tracker && (commentThread == commentTrackerThread || commentThread == commentTrackerThreadCanMerge)"
+          "when": "commentController == comment-tracker && (commentThread == commentTrackerThreadOpen || commentThread == commentTrackerThreadOpenCanMerge)"
+        },
+        {
+          "command": "comment-tracker.unresolveCommentThread",
+          "group": "inline@1",
+          "when": "commentController == comment-tracker && (commentThread == commentTrackerThreadResolved || commentThread == commentTrackerThreadResolvedCanMerge)"
         },
         {
           "command": "comment-tracker.mergeTrackedChanges",
           "group": "inline@2",
-          "when": "commentController == comment-tracker && commentThread == commentTrackerThreadCanMerge"
+          "when": "commentController == comment-tracker && (commentThread == commentTrackerThreadOpenCanMerge || commentThread == commentTrackerThreadResolvedCanMerge)"
         },
         {
           "command": "comment-tracker.deleteCommentThread",
           "group": "inline@3",
-          "when": "commentController == comment-tracker && (commentThread == commentTrackerThread || commentThread == commentTrackerThreadCanMerge)"
+          "when": "commentController == comment-tracker && (commentThread == commentTrackerThreadOpen || commentThread == commentTrackerThreadOpenCanMerge || commentThread == commentTrackerThreadResolved || commentThread == commentTrackerThreadResolvedCanMerge)"
         }
       ],
       "comments/commentThread/context": [
@@ -120,8 +145,30 @@
       "view/title": [
         {
           "command": "comment-tracker.openReviewPanel",
-          "group": "navigation",
+          "group": "navigation@1",
           "when": "view == commentTrackerView"
+        },
+        {
+          "command": "comment-tracker.showResolvedComments",
+          "group": "navigation@2",
+          "when": "view == commentTrackerView && !commentTracker.showResolvedComments"
+        },
+        {
+          "command": "comment-tracker.hideResolvedComments",
+          "group": "navigation@2",
+          "when": "view == commentTrackerView && commentTracker.showResolvedComments"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "comment-tracker.resolveTreeComment",
+          "group": "navigation@1",
+          "when": "view == commentTrackerView && viewItem == commentTrackerOpenComment"
+        },
+        {
+          "command": "comment-tracker.unresolveTreeComment",
+          "group": "navigation@1",
+          "when": "view == commentTrackerView && viewItem == commentTrackerResolvedComment"
         }
       ]
     },

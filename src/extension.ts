@@ -26,8 +26,10 @@ const CONTROLLER_ID = 'comment-tracker';
 const SAVE_DELAY_MS = 500;
 const EXTERNAL_RELOAD_DELAY_MS = 150;
 const TRACKED_CHANGE_COALESCE_MS = 2_000;
-const THREAD_CONTEXT_DEFAULT = 'commentTrackerThread';
-const THREAD_CONTEXT_CAN_MERGE = 'commentTrackerThreadCanMerge';
+const THREAD_CONTEXT_OPEN = 'commentTrackerThreadOpen';
+const THREAD_CONTEXT_OPEN_CAN_MERGE = 'commentTrackerThreadOpenCanMerge';
+const THREAD_CONTEXT_RESOLVED = 'commentTrackerThreadResolved';
+const THREAD_CONTEXT_RESOLVED_CAN_MERGE = 'commentTrackerThreadResolvedCanMerge';
 
 let commentController: vscode.CommentController;
 let commentsTreeProvider: CommentsTreeProvider;
@@ -38,6 +40,7 @@ let saveTimeout: NodeJS.Timeout | undefined;
 let reloadTimeout: NodeJS.Timeout | undefined;
 let restoreVersion = 0;
 let lastActiveDocumentUri = vscode.window.activeTextEditor?.document.uri;
+let showResolvedComments = false;
 
 const commentThreads = new Map<string, vscode.CommentThread>();
 const commentIdsByThread = new WeakMap<vscode.CommentThread, string>();
@@ -74,6 +77,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   commentsTreeProvider = new CommentsTreeProvider();
+  await vscode.commands.executeCommand(
+    'setContext',
+    'commentTracker.showResolvedComments',
+    showResolvedComments
+  );
   context.subscriptions.push(
     commentController,
     vscode.window.registerTreeDataProvider('commentTrackerView', commentsTreeProvider),
@@ -124,7 +132,7 @@ function registerCommands(): vscode.Disposable[] {
     ),
     vscode.commands.registerCommand(
       'comment-tracker.resolveCommentThread',
-      (thread: vscode.CommentThread) => setCommentResolved(thread)
+      (thread: vscode.CommentThread) => setCommentResolved(thread, true)
     ),
     vscode.commands.registerCommand(
       'comment-tracker.unresolveCommentThread',
@@ -141,7 +149,23 @@ function registerCommands(): vscode.Disposable[] {
     ),
     vscode.commands.registerCommand('comment-tracker.exportToMarkdown', exportToMarkdown),
     vscode.commands.registerCommand('comment-tracker.deleteAllComments', deleteAllComments),
-    vscode.commands.registerCommand('comment-tracker.openReviewPanel', openReviewPanel)
+    vscode.commands.registerCommand('comment-tracker.openReviewPanel', openReviewPanel),
+    vscode.commands.registerCommand(
+      'comment-tracker.showResolvedComments',
+      () => setResolvedCommentsVisible(true)
+    ),
+    vscode.commands.registerCommand(
+      'comment-tracker.hideResolvedComments',
+      () => setResolvedCommentsVisible(false)
+    ),
+    vscode.commands.registerCommand(
+      'comment-tracker.resolveTreeComment',
+      (item: CommentTreeItem) => setTreeCommentResolved(item, true)
+    ),
+    vscode.commands.registerCommand(
+      'comment-tracker.unresolveTreeComment',
+      (item: CommentTreeItem) => setTreeCommentResolved(item, false)
+    )
   ];
 }
 
@@ -443,9 +467,10 @@ function configureThread(
   }
   thread.canReply = true;
   commentIdsByThread.set(thread, comment.id);
-  thread.contextValue = commentHasMergeableTrackedChanges(comment)
-    ? THREAD_CONTEXT_CAN_MERGE
-    : THREAD_CONTEXT_DEFAULT;
+  const canMerge = commentHasMergeableTrackedChanges(comment);
+  thread.contextValue = comment.resolved
+    ? (canMerge ? THREAD_CONTEXT_RESOLVED_CAN_MERGE : THREAD_CONTEXT_RESOLVED)
+    : (canMerge ? THREAD_CONTEXT_OPEN_CAN_MERGE : THREAD_CONTEXT_OPEN);
   thread.state = comment.resolved
     ? vscode.CommentThreadState.Resolved
     : vscode.CommentThreadState.Unresolved;
@@ -630,18 +655,39 @@ async function replyToComment(reply: vscode.CommentReply): Promise<void> {
 
 async function setCommentResolved(
   thread: vscode.CommentThread,
-  requestedState?: boolean
+  requestedState: boolean
+): Promise<void> {
+  const commentId = commentIdForThread(thread);
+  await setCommentResolvedById(commentId, requestedState);
+}
+
+async function setTreeCommentResolved(
+  item: CommentTreeItem | undefined,
+  requestedState: boolean
+): Promise<void> {
+  if (!item || item.kind !== 'comment') {
+    return;
+  }
+  await setCommentResolvedById(item.comment.id, requestedState);
+}
+
+async function setCommentResolvedById(
+  commentId: string | undefined,
+  requestedState: boolean
 ): Promise<void> {
   if (!await ensureStoreCurrent()) {
     return;
   }
-  const comment = commentStore.comments.find(item => item.id === commentIdForThread(thread));
+  const comment = commentStore.comments.find(item => item.id === commentId);
   if (!comment) {
     vscode.window.showErrorMessage('Comment data not found.');
     return;
   }
-  comment.resolved = requestedState ?? !comment.resolved;
-  configureThread(thread, comment);
+  comment.resolved = requestedState;
+  const thread = commentThreads.get(comment.id);
+  if (thread) {
+    configureThread(thread, comment);
+  }
   persistComments();
 }
 
@@ -1024,6 +1070,16 @@ async function openReviewPanel(): Promise<void> {
   }
 }
 
+async function setResolvedCommentsVisible(visible: boolean): Promise<void> {
+  showResolvedComments = visible;
+  await vscode.commands.executeCommand(
+    'setContext',
+    'commentTracker.showResolvedComments',
+    visible
+  );
+  commentsTreeProvider.refresh();
+}
+
 async function exportToMarkdown(): Promise<void> {
   if (commentStore.comments.length === 0) {
     vscode.window.showInformationMessage('No comments to export.');
@@ -1096,7 +1152,7 @@ class CommentsTreeProvider implements vscode.TreeDataProvider<CommentTreeItem> {
   getChildren(element?: CommentTreeItem): CommentTreeItem[] {
     if (!element) {
       return commentStore.comments
-        .filter(comment => !comment.resolved)
+        .filter(comment => showResolvedComments || !comment.resolved)
         .sort((left, right) =>
           left.filePath.localeCompare(right.filePath)
           || left.range.start.line - right.range.start.line
@@ -1133,6 +1189,11 @@ class CommentTreeItem extends vscode.TreeItem {
   ) {
     super(label, collapsibleState);
     this.tooltip = tooltip;
+    this.command = {
+      command: 'comment-tracker.navigateToComment',
+      title: 'Go to Comment',
+      arguments: [comment]
+    };
   }
 
   static forComment(comment: CommentData): CommentTreeItem {
@@ -1143,14 +1204,19 @@ class CommentTreeItem extends vscode.TreeItem {
       vscode.TreeItemCollapsibleState.Expanded,
       `${comment.author} · ${new Date(comment.timestamp).toLocaleString()}\n\n${comment.text}`
     );
-    item.command = {
-      command: 'comment-tracker.navigateToComment',
-      title: 'Go to Comment',
-      arguments: [comment]
-    };
+    item.contextValue = comment.resolved
+      ? 'commentTrackerResolvedComment'
+      : 'commentTrackerOpenComment';
     item.iconPath = new vscode.ThemeIcon(
-      anchorConfidence.get(comment.id) === 'position' ? 'warning' : 'comment-discussion'
+      anchorConfidence.get(comment.id) === 'position'
+        ? 'warning'
+        : comment.resolved
+          ? 'pass-filled'
+          : 'comment-discussion'
     );
+    if (comment.resolved) {
+      item.description = 'Resolved';
+    }
     return item;
   }
 
@@ -1162,11 +1228,6 @@ class CommentTreeItem extends vscode.TreeItem {
       vscode.TreeItemCollapsibleState.None,
       new Date(comment.timestamp).toLocaleString()
     );
-    item.command = {
-      command: 'comment-tracker.navigateToComment',
-      title: 'Go to Comment',
-      arguments: [comment]
-    };
     return item;
   }
 

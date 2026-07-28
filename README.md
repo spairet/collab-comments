@@ -42,7 +42,7 @@ A VS Code extension for collaborative commenting with author tracking, timestamp
 
 1. Click the checkmark button in the comment thread title bar
 2. The author name changes to "RESOLVED - [Author Name]"
-3. Click again to unresolve
+3. Resolved threads show a cross button labelled "Unresolve"
 
 ### Deleting Comments
 
@@ -60,7 +60,9 @@ A VS Code extension for collaborative commenting with author tracking, timestamp
 
 Run `Comment Tracker: Open Review Panel` to use VS Code's native Comments panel,
 or open the Comment Tracker activity-bar view. Select a comment to jump to its
-current location.
+current location. Use the eye button in the Review Comments view title to show
+resolved comments; use the crossed-out eye to hide them again. Right-click a
+comment in this view to resolve or unresolve it.
 
 ## Configuration
 
@@ -86,6 +88,8 @@ Or edit `settings.json`:
 | `Comment Tracker: Delete Comment` | Delete a comment thread from a list |
 | `Comment Tracker: Delete Reply` | Delete an individual reply from a thread |
 | `Comment Tracker: Open Review Panel` | Open VS Code's native Comments review panel |
+| `Show Resolved Comments` | Include resolved threads in the Review Comments view |
+| `Hide Resolved Comments` | Return the Review Comments view to unresolved threads only |
 | `Merge Tracked Changes` | Keep the oldest deletion and newest addition within each reply interval |
 
 ## Storage
