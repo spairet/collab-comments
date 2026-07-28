@@ -33,19 +33,15 @@
     "commands": [
       {
         "command": "comment-tracker.addComment",
-        "title": "Add Comment"
+        "title": "Comment Tracker: Add Comment"
       },
       {
         "command": "comment-tracker.viewComments",
-        "title": "View All Comments"
+        "title": "Comment Tracker: View Comments in Current File"
       },
       {
         "command": "comment-tracker.deleteComment",
-        "title": "Delete Comment"
-      },
-      {
-        "command": "comment-tracker.deleteReply",
-        "title": "Delete Reply"
+        "title": "Comment Tracker: Delete Comment"
       },
       {
         "command": "comment-tracker.deleteCommentThread",
@@ -63,6 +59,11 @@
         "icon": "$(issues)"
       },
       {
+        "command": "comment-tracker.mergeTrackedChanges",
+        "title": "Merge Tracked Changes",
+        "icon": "$(git-merge)"
+      },
+      {
         "command": "comment-tracker.replyNote",
         "title": "Reply"
       },
@@ -74,11 +75,15 @@
       {
         "command": "comment-tracker.exportToMarkdown",
         "title": "Comment Tracker: Export Comments to Markdown"
-      }
-      ,
+      },
       {
         "command": "comment-tracker.deleteAllComments",
         "title": "Comment Tracker: Delete All Comments"
+      },
+      {
+        "command": "comment-tracker.openReviewPanel",
+        "title": "Comment Tracker: Open Review Panel",
+        "icon": "$(comment-discussion)"
       }
     ],
     "menus": {
@@ -92,12 +97,17 @@
         {
           "command": "comment-tracker.resolveCommentThread",
           "group": "inline@1",
-          "when": "commentController == comment-tracker"
+          "when": "commentController == comment-tracker && (commentThread == commentTrackerThread || commentThread == commentTrackerThreadCanMerge)"
+        },
+        {
+          "command": "comment-tracker.mergeTrackedChanges",
+          "group": "inline@2",
+          "when": "commentController == comment-tracker && commentThread == commentTrackerThreadCanMerge"
         },
         {
           "command": "comment-tracker.deleteCommentThread",
-          "group": "inline@2",
-          "when": "commentController == comment-tracker"
+          "group": "inline@3",
+          "when": "commentController == comment-tracker && (commentThread == commentTrackerThread || commentThread == commentTrackerThreadCanMerge)"
         }
       ],
       "comments/commentThread/context": [
@@ -105,6 +115,13 @@
           "command": "comment-tracker.replyNote",
           "group": "inline@1",
           "when": "commentController == comment-tracker"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "comment-tracker.openReviewPanel",
+          "group": "navigation",
+          "when": "view == commentTrackerView"
         }
       ]
     },
@@ -121,7 +138,7 @@
       "comment-tracker-container": [
         {
           "id": "commentTrackerView",
-          "name": "Unresolved Comments"
+          "name": "Review Comments"
         }
       ]
     },
@@ -136,7 +153,8 @@
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "test": "vscode-test"
+    "test": "npm run compile-tests && node --test out/anchors.test.js out/repository.test.js",
+    "test:extension": "vscode-test"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",

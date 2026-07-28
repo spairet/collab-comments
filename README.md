@@ -4,12 +4,16 @@ A VS Code extension for collaborative commenting with author tracking, timestamp
 
 ## Features
 
-- **Inline Comments**: Add comments that appear inline in your editor and move with the text
+- **Resilient Inline Comments**: Comments use selected text and surrounding context to stay attached as files change
 - **Author Tracking**: Every comment records who wrote it and when
 - **Threaded Replies**: Reply to comments to create discussion threads
+- **Tracked Selection Changes**: Replacing commented text adds an old/new diff to its discussion thread
+- **Merge Change History**: Collapse each uninterrupted edit sequence without merging across replies
 - **Resolve/Unresolve**: Mark comment threads as resolved when issues are addressed
 - **Delete with Confirmation**: Delete entire threads or individual replies with safety confirmations
-- **Persistent Storage**: Comments are saved in `.vscode/collab-comments.json` and sync via Git
+- **Git-friendly Storage**: Comments are saved in `.comments/collab-comments.json` only while comments exist
+- **External Edit Support**: Valid changes made directly to the JSON file are reloaded instead of overwritten
+- **Review Panel**: Use VS Code's native Comments panel for a document-review-style overview
 - **Configurable Author**: Set your default name in settings to avoid repeated prompts
 - **Any File Type**: Works on any file - not just QMD or Markdown
 
@@ -32,18 +36,18 @@ A VS Code extension for collaborative commenting with author tracking, timestamp
 1. Click inside the comment thread
 2. Type your reply in the text box
 3. Press `Ctrl+Enter` to submit
-4. Replies are visually distinguished with a `└─` prefix
+4. The reply appears in the same review thread
 
 ### Resolving Comments
 
-1. Click the checkmark (✓) button in the comment thread title bar
+1. Click the checkmark button in the comment thread title bar
 2. The author name changes to "RESOLVED - [Author Name]"
 3. Click again to unresolve
 
 ### Deleting Comments
 
 **Delete Entire Thread:**
-- Click the trash icon (🗑️) in the comment thread title bar
+- Click the trash icon in the comment thread title bar
 - Confirm deletion in the modal dialog
 
 **Delete Individual Reply:**
@@ -54,9 +58,9 @@ A VS Code extension for collaborative commenting with author tracking, timestamp
 
 ### Viewing All Comments
 
-1. Open Command Palette (`Ctrl+Shift+P`)
-2. Type "View All Comments"
-3. Select a comment to jump to its location
+Run `Comment Tracker: Open Review Panel` to use VS Code's native Comments panel,
+or open the Comment Tracker activity-bar view. Select a comment to jump to its
+current location.
 
 ## Configuration
 
@@ -78,19 +82,27 @@ Or edit `settings.json`:
 | Command | Description |
 |---------|-------------|
 | `Comment Tracker: Add Comment` | Add a new comment at cursor position |
-| `Comment Tracker: View All Comments` | List all comments in current file |
+| `Comment Tracker: View Comments in Current File` | List comments in the active file |
 | `Comment Tracker: Delete Comment` | Delete a comment thread from a list |
 | `Comment Tracker: Delete Reply` | Delete an individual reply from a thread |
+| `Comment Tracker: Open Review Panel` | Open VS Code's native Comments review panel |
+| `Merge Tracked Changes` | Keep the oldest deletion and newest addition within each reply interval |
 
 ## Storage
 
-Comments are stored in `.vscode/collab-comments.json` within your workspace. This JSON file contains:
+Comments are stored in `.comments/collab-comments.json` at the workspace root. The
+file and its directory are not created until the first comment is added, and they
+are removed when the last comment is deleted. The JSON file contains:
 - Comment ID, text, author, and timestamp
 - File path and line range information
 - Threaded replies with their own authors and timestamps
 - Resolved status
 
 **Tip:** Commit this file to version control (Git) to share comments with your team!
+
+You may also edit the JSON directly. Save valid JSON and the extension will reload
+it. While that document has unsaved changes, comment commands will not write to it.
+If the JSON is invalid, the extension reports the error and leaves the file intact.
 
 ## Requirements
 
@@ -115,7 +127,9 @@ Comments are stored in `.vscode/collab-comments.json` within your workspace. Thi
 
 ## Tips
 
-- Comments move with the text when you edit the file
+- Comments re-anchor using selected text and surrounding context after edits, pulls, and rebases
+- Rapid edits to commented text are combined into a single tracked-change entry
+- Threads show a merge button only when an uninterrupted interval contains multiple tracked changes
 - Use resolve to close discussions without deleting the history
 - The JSON file can be committed to Git for team collaboration
 - Set a default author name in settings to streamline your workflow
