@@ -1,4 +1,5 @@
 import * as path from 'path';
+import * as fs from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import * as vscode from 'vscode';
 import {
@@ -21,6 +22,8 @@ import {
   TrackedTextChangeData
 } from './model';
 import { CommentRepository, ReloadResult } from './repository';
+import { QuartoAction, QuartoBridgeState, QuartoPreviewBridge, shouldStartQuartoBridge } from './quartoBridge';
+import { mapRenderedSelection, sourceHash } from './quartoMapping';
 
 const CONTROLLER_ID = 'comment-tracker';
 const SAVE_DELAY_MS = 500;
@@ -41,6 +44,7 @@ let reloadTimeout: NodeJS.Timeout | undefined;
 let restoreVersion = 0;
 let lastActiveDocumentUri = vscode.window.activeTextEditor?.document.uri;
 let showResolvedComments = false;
+let quartoBridge: QuartoPreviewBridge | undefined;
 
 const commentThreads = new Map<string, vscode.CommentThread>();
 const commentIdsByThread = new WeakMap<vscode.CommentThread, string>();
@@ -112,6 +116,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     watcher.onDidChange(() => scheduleExternalReload(), undefined, context.subscriptions);
     watcher.onDidDelete(() => scheduleExternalReload(), undefined, context.subscriptions);
     context.subscriptions.push(watcher);
+    if (shouldStartQuartoBridge(vscode.env.remoteName)) {
+      quartoBridge = new QuartoPreviewBridge(workspaceFolder.uri.fsPath, {
+        state: bridgeState,
+        action: bridgeAction
+      });
+      try {
+        await quartoBridge.start();
+        context.subscriptions.push({ dispose: () => quartoBridge?.dispose() });
+      } catch (error) {
+        quartoBridge.dispose();
+        quartoBridge = undefined;
+        const reason = error instanceof Error ? error.message : String(error);
+        void vscode.window.showWarningMessage(`Comment Tracker Quarto preview bridge is unavailable: ${reason}`);
+      }
+    }
   }
 
   await restoreAllThreads();
@@ -482,6 +501,126 @@ function commentIdForThread(thread: vscode.CommentThread): string | undefined {
 
 function hashDocument(text: string): string {
   return createHash('sha256').update(text).digest('hex');
+}
+
+function bridgeFileUri(filePath: string): vscode.Uri {
+  return vscode.Uri.file(filePath);
+}
+
+function bridgeSource(filePath: string): { uri: vscode.Uri; relative: string; text: string } {
+  const uri = bridgeFileUri(filePath);
+  const relative = relativeFilePath(uri);
+  if (!relative || path.extname(relative).toLowerCase() !== '.qmd') {
+    throw new Error('Only QMD files in the current workspace can use preview comments.');
+  }
+  const open = vscode.workspace.textDocuments.find(document => document.uri.fsPath === uri.fsPath);
+  if (open?.isDirty) {
+    throw new Error('Save the QMD document before changing its preview comments.');
+  }
+  return { uri, relative, text: fs.readFileSync(uri.fsPath, 'utf8') };
+}
+
+async function bridgeState(filePath: string): Promise<QuartoBridgeState> {
+  if (!await ensureStoreCurrent()) {
+    throw new Error('The comments store is dirty, invalid, or changed externally.');
+  }
+  const source = bridgeSource(filePath);
+  return {
+    sourceText: source.text,
+    sourceHash: sourceHash(source.text),
+    author: getPassiveAuthorName(),
+    comments: commentStore.comments.filter(comment => comment.filePath === source.relative),
+    etag: hashDocument(`${sourceHash(source.text)}:${JSON.stringify(commentStore)}`)
+  };
+}
+
+async function bridgeAction(
+  filePath: string,
+  action: QuartoAction
+): Promise<QuartoBridgeState | { status: string }> {
+  if (!await ensureStoreCurrent()) {
+    throw new Error('The comments store is dirty, invalid, or changed externally.');
+  }
+  const storeBeforeMutation = structuredClone(commentStore);
+  const source = bridgeSource(filePath);
+  const find = (id: string): CommentData => {
+    const comment = commentStore.comments.find(item => item.id === id && item.filePath === source.relative);
+    if (!comment) {
+      throw new Error('The requested comment thread no longer exists.');
+    }
+    return comment;
+  };
+  if (action.type === 'navigate') {
+    await navigateToComment(find(action.threadId));
+    return { status: 'navigated' };
+  }
+  if (action.type === 'add') {
+    if (action.sourceHash !== sourceHash(source.text)) {
+      throw new Error('The preview is stale. Refresh it before adding a comment.');
+    }
+    const mapped = mapRenderedSelection(source.text, action.selection);
+    if (!mapped) {
+      throw new Error('That rendered selection cannot be mapped uniquely to QMD source text.');
+    }
+    const comment: CommentData = {
+      id: randomUUID(), author: action.author, timestamp: new Date().toISOString(), text: action.text,
+      filePath: source.relative, range: mapped.range, selectedText: mapped.selectedText,
+      contextBefore: mapped.contextBefore, contextAfter: mapped.contextAfter,
+      documentHash: sourceHash(source.text), replies: [], trackedChanges: [], resolved: false
+    };
+    commentStore.comments.push(comment);
+    const document = await vscode.workspace.openTextDocument(source.uri);
+    const thread = commentController.createCommentThread(document.uri, toVsRange(comment.range), []);
+    configureThread(thread, comment, true);
+    commentThreads.set(comment.id, thread);
+    anchorConfidence.set(comment.id, 'exact');
+  } else if (action.type === 'reply') {
+    const comment = find(action.threadId);
+    clearPendingTrackedChange(comment.id);
+    comment.replies = [...(comment.replies ?? []), {
+      id: randomUUID(), author: action.author, timestamp: new Date().toISOString(), text: action.text
+    }];
+    const thread = commentThreads.get(comment.id);
+    if (thread) {configureThread(thread, comment);}
+  } else if (action.type === 'set-resolved') {
+    const comment = find(action.threadId);
+    comment.resolved = action.resolved;
+    const thread = commentThreads.get(comment.id);
+    if (thread) {configureThread(thread, comment);}
+  } else if (action.type === 'delete-thread') {
+    const comment = find(action.threadId);
+    commentStore.comments = commentStore.comments.filter(item => item.id !== comment.id);
+    commentThreads.get(comment.id)?.dispose();
+    commentThreads.delete(comment.id);
+    anchorConfidence.delete(comment.id);
+    clearPendingTrackedChange(comment.id);
+  } else if (action.type === 'delete-reply') {
+    const comment = find(action.threadId);
+    const replies = comment.replies ?? [];
+    if (!replies.some(reply => reply.id === action.replyId)) {throw new Error('The requested reply no longer exists.');}
+    comment.replies = replies.filter(reply => reply.id !== action.replyId);
+    const thread = commentThreads.get(comment.id);
+    if (thread) {configureThread(thread, comment);}
+  } else if (action.type === 'merge-tracked-changes') {
+    const comment = find(action.threadId);
+    if (!commentHasMergeableTrackedChanges(comment)) {throw new Error('There are no consecutive tracked changes to merge.');}
+    clearPendingTrackedChange(comment.id);
+    comment.trackedChanges = collapseTrackedChangesBetweenReplies(
+      comment.trackedChanges ?? [], (comment.replies ?? []).map(reply => reply.timestamp)
+    );
+    const thread = commentThreads.get(comment.id);
+    if (thread) {configureThread(thread, comment);}
+  }
+  if (!persistComments()) {
+    // A bridge request is not allowed to leave VS Code showing a mutation that
+    // was rejected because another process changed the JSON store.
+    commentStore = storeBeforeMutation;
+    await restoreAllThreads();
+    commentsTreeProvider.refresh();
+    throw new Error('The comments store could not be saved without overwriting external changes.');
+  }
+  commentsTreeProvider.refresh();
+  return bridgeState(filePath);
 }
 
 function locateComment(document: vscode.TextDocument, comment: CommentData): vscode.Range {

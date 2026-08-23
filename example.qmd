@@ -1,0 +1,11 @@
+---
+title: Collab Comments example
+filters: [collab-comments]
+collab-comments:
+  export: false
+  show-resolved: false
+---
+
+# Preview comments
+
+Select this exact sentence in an HTML preview to add a source-backed comment.

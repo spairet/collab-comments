@@ -14,3 +14,4 @@ node_modules/**
 esbuild.js
 .pat
 icon.svg
+!_extensions/**

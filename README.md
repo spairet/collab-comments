@@ -16,6 +16,7 @@ A VS Code extension for collaborative commenting with author tracking, timestamp
 - **Review Panel**: Use VS Code's native Comments panel for a document-review-style overview
 - **Configurable Author**: Set your default name in settings to avoid repeated prompts
 - **Any File Type**: Works on any file - not just QMD or Markdown
+- **Quarto Live Preview**: Add and manage QMD comments from local HTML preview margins without editing source text
 
 ## Usage
 
@@ -111,6 +112,51 @@ If the JSON is invalid, the extension reports the error and leaves the file inta
 ## Requirements
 
 - VS Code 1.85.0 or higher
+- Quarto 1.4 or higher for the optional live-preview filter
+
+## Quarto live-preview comments
+
+Install the Quarto extension once per project (or from a checked-out repository):
+
+```bash
+quarto add MikeLydeamore/collab-comments
+```
+
+Then enable it in a QMD document or project:
+
+```yaml
+filters: [collab-comments]
+collab-comments:
+  export: false
+  show-resolved: false
+```
+
+When this VS Code extension is running in the first workspace folder, an HTML
+Quarto preview in that workspace discovers a short-lived, local-only bridge. Select
+rendered text in the main document, right-click, and choose **Add comment**. The
+preview maps the literal selection back to the saved QMD snapshot; ambiguous,
+generated, stale, or unsaved selections are rejected rather than guessed. Preview
+cards support replies, resolve/unresolve, deletion confirmations, tracked-change
+merging, and jumping to the source. The first release never edits QMD text.
+
+The bridge listens only on a random `127.0.0.1` port, requires a per-session bearer
+token, and writes a permission-restricted descriptor in the OS temp directory. It
+accepts only `.qmd` paths under the current workspace and refuses updates while the
+QMD or comment-store JSON is dirty or externally conflicted. Close VS Code to remove
+the descriptor immediately; otherwise it expires quickly.
+
+Static HTML stays comment-free by default. To deliberately publish a read-only
+snapshot (including comment text), opt in:
+
+```yaml
+collab-comments:
+  export: true
+  show-resolved: false
+```
+
+Set `show-resolved: true` to include resolved threads in either exported output or
+the local preview. The filter is a no-op for non-HTML formats, revealjs, and other
+non-standard outputs should not use this integration.
 
 ## Installation
 
