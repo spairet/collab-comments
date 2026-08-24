@@ -1,0 +1,48 @@
+body { margin: 0; padding: 0; font: 13px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; color: var(--vscode-editor-foreground); }
+#app { padding: .5rem .65rem 1rem; }
+
+.panel-header { position: sticky; top: 0; z-index: 2; background: var(--vscode-sideBar-background); padding: .45rem .1rem .5rem; }
+.panel-title { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; opacity: .8; margin: 0 0 .35rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-controls { display: flex; align-items: center; gap: .4rem; font-size: 12px; }
+.panel-controls label { display: flex; align-items: center; gap: .3rem; cursor: pointer; user-select: none; }
+.panel-empty { opacity: .7; padding: 1rem .25rem; }
+.panel-cards { position: relative; }
+
+.collab-comments-card { background: var(--vscode-editor-background); border: 1px solid var(--vscode-panel-border, #e0e0e0); border-radius: 8px; padding: .7rem .75rem .6rem; margin: 0 0 .6rem; box-sizing: border-box; cursor: pointer; }
+.collab-comments-card:hover { border-color: var(--vscode-focusBorder, #0f6cbd); }
+.collab-comments-card button, .collab-comments-card input, .collab-comments-card textarea { cursor: auto; }
+.collab-comments-card button { cursor: pointer; }
+.collab-comments-card.active { outline: 2px solid #0f6cbd; outline-offset: -1px; }
+.collab-comments-card.resolved { opacity: .7; }
+.collab-comments-card.resolved::before { content: '✓ Resolved'; display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: #107c10; margin-bottom: .35rem; }
+
+.collab-comments-head { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.collab-comments-avatar { flex: none; width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #fff; user-select: none; }
+.collab-comments-meta { display: flex; align-items: baseline; gap: .45rem; min-width: 0; flex: 1; }
+.collab-comments-author { font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collab-comments-time, .collab-comments-source-line { font-size: 11px; opacity: .65; white-space: nowrap; }
+.collab-comments-source-line { display: block; margin-top: .4rem; font-style: italic; }
+
+.collab-comments-body { white-space: pre-wrap; margin: .45rem 0 0; overflow-wrap: anywhere; }
+
+.collab-comments-change { background: rgba(128, 128, 128, .12); border-radius: 5px; padding: .4rem .55rem; margin: .5rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; line-height: 1.5; }
+.collab-comments-change .del { color: #f14c4c; }
+.collab-comments-change .add { color: #37bd58; }
+
+.collab-comments-replies { margin-top: .6rem; display: grid; gap: .5rem; }
+.collab-comments-reply { display: flex; gap: .5rem; align-items: flex-start; background: rgba(15, 108, 189, .06); border-left: 3px solid #6ba6dc; border-radius: 4px; padding: .45rem .55rem .4rem; margin-left: .85rem; }
+.collab-comments-reply .collab-comments-avatar { width: 22px; height: 22px; font-size: 9.5px; margin-top: 2px; }
+.collab-comments-reply-body { min-width: 0; flex: 1; }
+.collab-comments-reply-body p { white-space: pre-wrap; margin: .05rem 0 0; overflow-wrap: anywhere; }
+
+.collab-comments-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .15rem; margin-top: .55rem; }
+.collab-comments-actions button, .collab-comments-link { appearance: none; background: none; border: 0; padding: .2rem .4rem; border-radius: 4px; color: var(--vscode-textLink-foreground, #0f6cbd); font-size: 12px; font-family: inherit; cursor: pointer; }
+.collab-comments-actions button:hover, .collab-comments-link:hover { background: rgba(15, 108, 189, .1); text-decoration: underline; }
+.collab-comments-actions button.danger, .collab-comments-link.danger { color: var(--vscode-errorForeground, #a4262c); }
+.collab-comments-actions button.danger:hover, .collab-comments-link.danger:hover { background: rgba(164, 38, 44, .1); }
+
+.collab-comments-reply-row { display: flex; gap: .35rem; margin-top: .45rem; }
+.collab-comments-reply-row input { flex: 1; min-width: 0; box-sizing: border-box; font: inherit; font-size: 12.5px; padding: .32rem .55rem; border: 1px solid var(--vscode-input-border, #d1d1d1); border-radius: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
+.collab-comments-reply-row input:focus { outline: none; border-color: #0f6cbd; }
+.collab-comments-reply-row button { flex: none; background: #0f6cbd; color: #fff; border: 0; border-radius: 4px; padding: .28rem .7rem; font-size: 12.5px; font-family: inherit; cursor: pointer; }
+.collab-comments-reply-row button:hover { background: #115ea3; }

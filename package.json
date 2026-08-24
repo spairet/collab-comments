@@ -27,6 +27,11 @@
           "type": "string",
           "default": "",
           "description": "Your default name for comments. If empty, will prompt each time or use system username."
+        },
+        "commentTracker.scrollSyncPanel": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scroll the Discussion panel to follow the visible part of the document."
         }
       }
     },
@@ -42,30 +47,6 @@
       {
         "command": "comment-tracker.deleteComment",
         "title": "Comment Tracker: Delete Comment"
-      },
-      {
-        "command": "comment-tracker.deleteCommentThread",
-        "title": "Delete",
-        "icon": "$(trash)"
-      },
-      {
-        "command": "comment-tracker.resolveCommentThread",
-        "title": "Resolve",
-        "icon": "$(check)"
-      },
-      {
-        "command": "comment-tracker.unresolveCommentThread",
-        "title": "Unresolve",
-        "icon": "$(close)"
-      },
-      {
-        "command": "comment-tracker.mergeTrackedChanges",
-        "title": "Merge Tracked Changes",
-        "icon": "$(git-merge)"
-      },
-      {
-        "command": "comment-tracker.replyNote",
-        "title": "Reply"
       },
       {
         "command": "comment-tracker.deleteReply",
@@ -113,35 +94,6 @@
           "group": "navigation"
         }
       ],
-      "comments/commentThread/title": [
-        {
-          "command": "comment-tracker.resolveCommentThread",
-          "group": "inline@1",
-          "when": "commentController == comment-tracker && (commentThread == commentTrackerThreadOpen || commentThread == commentTrackerThreadOpenCanMerge)"
-        },
-        {
-          "command": "comment-tracker.unresolveCommentThread",
-          "group": "inline@1",
-          "when": "commentController == comment-tracker && (commentThread == commentTrackerThreadResolved || commentThread == commentTrackerThreadResolvedCanMerge)"
-        },
-        {
-          "command": "comment-tracker.mergeTrackedChanges",
-          "group": "inline@2",
-          "when": "commentController == comment-tracker && (commentThread == commentTrackerThreadOpenCanMerge || commentThread == commentTrackerThreadResolvedCanMerge)"
-        },
-        {
-          "command": "comment-tracker.deleteCommentThread",
-          "group": "inline@3",
-          "when": "commentController == comment-tracker && (commentThread == commentTrackerThreadOpen || commentThread == commentTrackerThreadOpenCanMerge || commentThread == commentTrackerThreadResolved || commentThread == commentTrackerThreadResolvedCanMerge)"
-        }
-      ],
-      "comments/commentThread/context": [
-        {
-          "command": "comment-tracker.replyNote",
-          "group": "inline@1",
-          "when": "commentController == comment-tracker"
-        }
-      ],
       "view/title": [
         {
           "command": "comment-tracker.openReviewPanel",
@@ -186,6 +138,11 @@
         {
           "id": "commentTrackerView",
           "name": "Review Comments"
+        },
+        {
+          "id": "commentTrackerReviewPanel",
+          "name": "Discussion",
+          "type": "webview"
         }
       ]
     },
@@ -200,7 +157,7 @@
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "test": "npm run compile-tests && node --test out/anchors.test.js out/repository.test.js out/quartoMapping.test.js out/quartoBridge.test.js",
+    "test": "npm run compile-tests && node --test out/anchors.test.js out/repository.test.js out/quartoMapping.test.js out/quartoBridge.test.js out/reviewPanel.test.js",
     "test:quarto": "bash tests/quarto/verify.sh",
     "test:extension": "vscode-test"
   },

@@ -1,0 +1,226 @@
+---
+title: "Scroll Sync Demo"
+format: html
+---
+
+# Scroll Sync Demo
+
+This is a long demo document for testing the Discussion panel scroll sync.
+Select any sentence in the preview (or in the editor) and add comments
+throughout, then scroll and watch the panel follow.
+
+## Section 1: Introduction
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor
+incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+
+Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu
+fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in
+culpa qui officia deserunt mollit anim id est laborum.
+
+Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium
+doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore
+veritatis et quasi architecto beatae vitae dicta sunt explicabo.
+
+## Section 2: Numbers and Lists
+
+Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed
+quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.
+
+1. First item with some explanatory text that runs long enough to wrap onto
+   a second line in most window sizes.
+2. Second item, also reasonably long so the list does not look sparse.
+3. Third item with a nested structure:
+   - Nested bullet one
+   - Nested bullet two
+   - Nested bullet three
+4. Fourth item closing out the list.
+
+Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur,
+adipisci velit, sed quia non numquam eius modi tempora incidunt ut labore et
+dolore magnam aliquam quaerat voluptatem.
+
+## Section 3: A Code Chunk
+
+The chunk below is generated output; comments cannot be anchored inside it,
+which is useful for testing the invalid-selection path.
+
+```{r}
+#| label: demo-summary
+summary(cars)
+```
+
+Ut enim ad minima veniam, quis nostrum exercitationem ullam corporis suscipit
+laboriosam, nisi ut aliquid ex ea commodi consequatur. Quis autem vel eum iure
+reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur.
+
+## Section 4: Quotations
+
+> Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse quam
+> nihil molestiae consequatur, vel illum qui dolorem eum fugiat quo voluptas
+> nulla pariatur.
+
+At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis
+praesentium voluptatum deleniti atque corrupti quos dolores et quas molestias
+excepturi sint occaecati cupiditate non provident, similique sunt in culpa qui
+officia deserunt mollitia animi, id est laborum et dolorum fuga.
+
+> A second blockquote, shorter, placed between paragraphs for variety.
+
+## Section 5: Tables
+
+Et harum quidem rerum facilis est et expedita distinctio. Nam libero tempore,
+cum soluta nobis est eligendi optio cumque nihil impedit quo minus id quod
+maxime placeat facere possimus, omnis voluptas assumenda est, omnis dolor
+repellendus.
+
+| Item    | Value | Notes                        |
+|---------|------:|------------------------------|
+| Alpha   |    10 | First row of the demo table  |
+| Beta    |    20 | Second row                   |
+| Gamma   |    30 | Third row                    |
+| Delta   |    40 | Fourth row                   |
+
+Temporibus autem quibusdam et aut officiis debitis aut rerum necessitatibus
+saepe eveniet ut et voluptates repudiandae sint et molestiae non recusandae.
+
+## Section 6: Filler Paragraphs
+
+Itaque earum rerum hic tenetur a sapiente delectus, ut aut reiciendis
+voluptatibus maiores alias consequatur aut perferendis doloribus asperiores
+repellat. Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+
+Aenean commodo ligula eget dolor. Aenean massa. Cum sociis natoque penatibus et
+magnis dis parturient montes, nascetur ridiculus mus. Donec quam felis, ultricies
+nec, pellentesque eu, pretium quis, sem.
+
+Nulla consequat massa quis enim. Donec pede justo, fringilla vel, aliquet nec,
+vulputate eget, arcu. In enim justo, rhoncus ut, imperdiet a, venenatis vitae,
+justo. Nullam dictum felis eu pede mollis pretium.
+
+Integer tincidunt. Cras dapibus. Vivamus elementum semper nisi. Aenean vulputate
+eleifend tellus. Aenean leo ligula, porttitor eu, consequat vitae, eleifend ac,
+enim. Aliquam lorem ante, dapibus in, viverra quis, feugiat a, tellus.
+
+Phasellus viverra nulla ut metus varius laoreet. Quisque rutrum. Aenean
+imperdiet. Etiam ultricies nisi vel augue. Curabitur ullamcorper ultricies nisi.
+Nam eget dui. Etiam rhoncus. Maecenas tempus, tellus eget condimentum rhoncus.
+
+## Section 7: More Filler
+
+Maecenas nec odio et ante tincidunt tempus. Donec vitae sapien ut libero
+venenatis faucibus. Nullam quis ante. Etiam sit amet orci eget eros faucibus
+tincidunt. Duis leo. Sed fringilla mauris sit amet nibh.
+
+Donec sodales sagittis magna. Sed consequat, leo eget bibendum sodales, augue
+velit cursus nunc, quis gravida magna mi a libero. Fusce vulputate eleifend
+sapien. Vestibulum purus quam, scelerisque ut, mollis sed, nonummy id, metus.
+
+Nullam accumsan lorem in dui. Cras ultricies mi eu turpis hendrerit fringilla.
+Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia
+Curae; In ac dui quis mi consectetuer lacinia. Morbi mollis tellus ac sapien.
+
+Phasellus volutpat, metus eget egestas mollis, lacus lacus blandit dui, id
+egestas quam mauris ut lacus. Fusce vel dui. Sed in libero ut nibh placerat
+accumsan. Proin faucibus arcu quis ante. In consectetuer turpis ut velit.
+
+## Section 8: Even More Filler
+
+Praesent dapibus, neque id cursus faucibus, tortor neque egestas augue, eu
+vulputate magna eros eu erat. Aliquam erat volutpat. Nam dui mi, tincidunt quis,
+accumsan porttitor, facilisis luctus, metus.
+
+Phasellus ultrices nulla quis nibh. Quisque a lectus. Donec consectetuer ligula
+vulputate sem tristique cursus. Nam nulla quam, gravida non, commodo a, sodales
+sit amet, nisi. Pellentesque fermentum dolor.
+
+Aliquam quam lectus, facilisis auctor, ultrices ut, elementum vulputate, nunc.
+Sed adipiscing ornare risus. Morbi est est, blandit sit amet, sagittis vel,
+euismod vel, velit. Pellentesque egestas sem. Suspendisse commodo ullamcorper
+magna.
+
+Fusce risus nisl, viverra et, tempor et, pretium in, sapien. Suspendisse
+pulvinar, augue ac venenatis condimentum, sem libero volutpat nibh, nec
+pellentesque velit pede quis nunc. Vestibulum ante ipsum primis in faucibus
+orci luctus et ultrices posuere cubilia Curae.
+
+## Section 9: A Second Code Chunk
+
+Another generated output partway down, so scrolling passes code as well as text.
+
+```{python}
+#| label: demo-range
+print(list(range(10)))
+```
+
+Donec quam felis, ultricies nec, pellentesque eu, pretium quis, sem. Nulla
+consequat massa quis enim. Donec pede justo, fringilla vel, aliquet nec,
+vulputate eget, arcu. In enim justo, rhoncus ut, imperdiet a, venenatis vitae.
+
+## Section 10: Sub-sections
+
+### Sub-section A
+
+Cras non dolor. Maecenas ullamcorper, dui et placerat feugiat, eros pede varius
+niisi, condimentum viverra felis nunc et lorem. Sed magna purus, fermentum eu,
+tincidunt eu, varius ut, felis.
+
+### Sub-section B
+
+In auctor lobortis lacus. Quisque libero metus, condimentum nec, tempor a,
+commodo mollis, magna. Vestibulum ullamcorper mauris at ligula. Fusce fermentum
+odio nec arcu. Vivamus euismod mauris.
+
+### Sub-section C
+
+Ut at dolor quis odio consequat varius. Praesent venenatis metus at tortor
+pulvinar varius. Etiam eu lacus. Quisque metus enim, venenatis fermentum,
+mollis in, porta et, nibh. Duis vulputate elit in elit. Mauris sollicitudin
+augue in mauris.
+
+## Section 11: Mid-document Checkpoint
+
+Halfway point: if you have comments scattered above and below, scrolling past
+this heading is a good moment to check the panel highlight clears and then
+re-attaches to the next thread.
+
+Suspendisse nisl elit, rhoncus eget, elementum ac, condimentum eget, diam. Nam
+at tortor in tellus interdum sagittis. Vestibulum loareet risus eu ligula.
+Praesent blandit laoreet nibh. Fusce convallis metus id felis luctus adipiscing.
+
+## Section 12: Long Unbroken Section
+
+Etiam imperdiet imperdiet orci. Nunc nec neque. Phasellus leo dolor, tempus non,
+auctor et, hendrerit quis, nisi. Curabitur ligula sapien, tincidunt non,
+euismod vitae, posuere imperdiet, leo.
+
+Maecenas malesuada. Praesent congue erat at massa. Sed cursus turpis vitae
+tortor. Donec posuere vulputate arcu. Phasellus accumsan cursus velit.
+Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere
+cubilia Curae; Sed aliquam, nisi quis porttitor congue, elit erat euismod
+orci, ac placerat dolor lectus quis orci.
+
+Phasellus consectetuer vestibulum elit. Aenean tellus metus, bibendum sed,
+posuere ac, mattis non, nunc. Vestibulum fringilla pede sit amet augue. In
+turpis. Pellentesque posuere. Praesent turpis.
+
+Aenean posuere, tortor sed cursus feugiat, nunc augue blandit nunc, eu
+sollicitudin urna dolor sagittis lacus. Donec elit libero, sodales nec,
+vulputate a, maecenas ac, lacus. Cras viverra aliquet enim. Duis arcu tortor.
+
+## Section 13: Near the End
+
+Sed augue ipsum, egestas nec, vestibulum et, malesuada adipiscing, dui.
+Vestibulum facilisis, purus nec pulvinar iaculis, ligula mi congue nunc,
+vitae euismod ligula urna in dolor. Mauris sollicitudin fermentum libero.
+
+Cras dapibus. Vivamus elementum semper nisi. Aenean vulputate eleifend tellus.
+Aenean leo ligula, porttitor eu, consequat vitae, eleifend ac, enim. Aliquam
+lorem ante, dapibus in, viverra quis, feugiat a, tellus.
+
+## Section 14: The End
+
+Final section: add a comment here, then scroll back to the top and confirm
+the panel releases the highlight and re-acquires threads as they enter the
+viewport on the way down.
