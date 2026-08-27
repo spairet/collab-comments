@@ -1,4 +1,4 @@
-body { margin: 0; padding: 0; font: 13px/1.完整5 "Segoe UI", system-ui, -apple-system, sans-serif; color: var(--vscode-editor-foreground); overflow-x: hidden; scroll-behavior: smooth; }
+body { margin: 0; padding: 0; font: 13px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; color: var(--vscode-editor-foreground); overflow-x: hidden; scroll-behavior: smooth; }
 #app { padding: .5rem .65rem 1rem; }
 
 .panel-header { position: sticky; top: 0; z-index: 2; background: var(--vscode-sideBar-background); padding: .45rem .1rem .5rem; }
