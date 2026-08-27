@@ -4,7 +4,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, test } from 'node:test';
-import { QuartoAction, QuartoPreviewBridge, QuartoBridgeState, shouldStartQuartoBridge } from './quartoBridge';
+import { QuartoAction, QuartoPreviewBridge, QuartoBridgeState } from './quartoBridge';
 
 const temporaryDirectories: string[] = [];
 const bridges: QuartoPreviewBridge[] = [];
@@ -99,7 +99,7 @@ test('rejects symlinked QMD paths that escape the workspace', async () => {
   fs.unlinkSync(outside);
 });
 
-test('issues file-scoped preview capabilities and supports legacy identifiers', async () => {
+test('issues file-scoped preview capabilities', async () => {
   const { root, file, bridge, actions } = fixture();
   const anotherFile = path.join(root, 'another.qmd'); fs.writeFileSync(anotherFile, 'Another QMD document.\n');
   await bridge.start();
@@ -110,17 +110,12 @@ test('issues file-scoped preview capabilities and supports legacy identifiers', 
   const capability = JSON.parse(bootstrap.body).token as string;
   assert.equal((await request(descriptor.endpoint, '/v1/bootstrap', { method: 'POST', origin: 'http://[::1]:4444', headers: contentTypeHeaders, body: JSON.stringify({ inputFile: file }) })).status, 200);
   assert.equal((await request(descriptor.endpoint, '/v1/bootstrap', { method: 'POST', origin: 'https://example.com', headers: contentTypeHeaders, body: JSON.stringify({ inputFile: file }) })).status, 401);
-  const reply = JSON.stringify({ type: 'reply', threadId: `legacy id.with spaces.${'x'.repeat(200)}`, text: 'reply', author: 'Tester' });
+  const reply = JSON.stringify({ type: 'reply', threadId: 'thread', text: 'reply', author: 'Tester' });
   const response = await request(descriptor.endpoint, `/v1/actions?filePath=${encodeURIComponent(file)}`, { method: 'POST', token: capability, headers: contentTypeHeaders, body: reply });
   assert.equal(response.status, 200); assert.equal(actions[0].type, 'reply');
   assert.equal((await request(descriptor.endpoint, `/v1/actions?filePath=${encodeURIComponent(anotherFile)}`, { method: 'POST', token: capability, headers: contentTypeHeaders, body: reply })).status, 401);
   const huge = 'x'.repeat(70 * 1024);
   assert.equal((await request(descriptor.endpoint, `/v1/actions?filePath=${encodeURIComponent(file)}`, { method: 'POST', token: capability, headers: contentTypeHeaders, body: huge })).status, 413);
-});
-
-test('does not start the local bridge in remote VS Code sessions', () => {
-  assert.equal(shouldStartQuartoBridge(undefined), true);
-  assert.equal(shouldStartQuartoBridge('ssh-remote'), false);
 });
 
 test('dispatches each supported bridge action discriminator', async () => {
@@ -131,7 +126,7 @@ test('dispatches each supported bridge action discriminator', async () => {
   const filePath = encodeURIComponent(file);
   const values: QuartoAction[] = [
     { type: 'add', sourceHash: 'a'.repeat(64), selection: { text: 'QMD', before: 'A ', after: ' document.' }, text: 'Note', author: 'Tester' },
-    { type: 'reply', threadId: '', text: 'Reply', author: 'Tester' },
+    { type: 'reply', threadId: 'thread', text: 'Reply', author: 'Tester' },
     { type: 'set-resolved', threadId: 'thread', resolved: true },
     { type: 'set-resolved', threadId: 'thread', resolved: false },
     { type: 'delete-thread', threadId: 'thread' },

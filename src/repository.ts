@@ -78,7 +78,7 @@ export class CommentRepository {
       }
 
       if (store.comments.length === 0) {
-        if (fs.existsSync(this.filePath)) {
+        if (currentRaw !== undefined) {
           fs.unlinkSync(this.filePath);
         }
         this.knownRaw = undefined;

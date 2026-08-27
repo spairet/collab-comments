@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import { CommentData } from './model';
-import { ReviewSurface } from './reviewSurface';
 import { PanelRequest, parsePanelRequest } from './panelProtocol';
 
 export interface PanelState {
@@ -9,7 +8,7 @@ export interface PanelState {
   comments: CommentData[];
 }
 
-export class WebviewSurface implements vscode.WebviewViewProvider, ReviewSurface {
+export class WebviewSurface implements vscode.WebviewViewProvider {
   static readonly viewId = 'commentTrackerReviewPanel';
 
   private view: vscode.WebviewView | undefined;
@@ -57,22 +56,6 @@ export class WebviewSurface implements vscode.WebviewViewProvider, ReviewSurface
     this.post({ type: 'anchor', fraction });
   }
 
-  upsert(_comment: CommentData): void {
-    this.pushState();
-  }
-
-  reconfigure(_commentId: string, _comment: CommentData): void {
-    this.pushState();
-  }
-
-  remove(_commentId: string): void {
-    this.pushState();
-  }
-
-  clear(): void {
-    this.pushState();
-  }
-
   dispose(): void {
     this.view = undefined;
   }
@@ -112,5 +95,4 @@ export class WebviewSurface implements vscode.WebviewViewProvider, ReviewSurface
 </html>`;
   }
 }
-
 

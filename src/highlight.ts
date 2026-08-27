@@ -63,8 +63,7 @@ export function commentInViewport<T extends HighlightCandidate>(
     if (comment.endLine < from || comment.startLine > to) {
       continue;
     }
-    if (!best || comment.startLine < best.startLine
-      || (comment.startLine === best.startLine && comment.endLine < best.endLine)) {
+    if (!best || comment.startLine < best.startLine) {
       best = comment;
     }
   }

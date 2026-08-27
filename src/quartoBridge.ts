@@ -44,10 +44,6 @@ export interface PreviewDescriptor {
   heartbeatAt: string;
 }
 
-export function shouldStartQuartoBridge(remoteName: string | undefined): boolean {
-  return !remoteName;
-}
-
 export class QuartoPreviewBridge {
   private server: http.Server | undefined;
   private descriptorPath: string | undefined;
@@ -304,9 +300,7 @@ export class QuartoPreviewBridge {
     if (typeof type !== 'string') {throw new Error('Action type is required.');}
     const id = (key: string): string => {
       const value = action[key];
-      // Historical stores permit arbitrary string identifiers, including empty
-      // values. Body limits bound their transport cost without changing them.
-      if (typeof value !== 'string' || Buffer.byteLength(value) > MAX_TEXT_BYTES) {throw new Error(`Invalid ${key}.`);}
+      if (typeof value !== 'string' || !value.trim() || Buffer.byteLength(value) > MAX_TEXT_BYTES) {throw new Error(`Invalid ${key}.`);}
       return value;
     };
     const text = (key: string): string => {

@@ -4,7 +4,6 @@
   const vscode = acquireVsCodeApi();
   let state = { file: null, showResolved: false, comments: [] };
   let activeCommentId = null;
-  let activeCommentElement = null;
   let lastFraction = 0;
 
   const palette = ['#0f6cbd', '#5c2e91', '#038387', '#c239b3', '#ca5010', '#107c10', '#8a6116', '#744da9'];
@@ -71,19 +70,28 @@
     return pre;
   };
 
-  const replyEntry = reply => {
+  const replyEntry = (reply, commentId) => {
     const entry = el('div', 'collab-comments-reply');
     entry.append(avatar(reply.author));
     const bodyBox = el('div', 'collab-comments-reply-body');
     bodyBox.append(meta(reply.author, reply.timestamp), el('p', null, reply.text || ''));
+    bodyBox.append(actionButton('Delete',
+      () => post({ type: 'delete-reply', commentId, replyId: reply.id }),
+      'collab-comments-link danger'));
     entry.append(bodyBox);
     return entry;
   };
 
   const activity = comment => {
     const items = [
-      ...(comment.replies ?? []).map(reply => ({ timestamp: reply.timestamp, render: () => replyEntry(reply) })),
-      ...(comment.trackedChanges ?? []).map(change => ({ timestamp: change.timestamp, render: () => diffBlock(change) }))
+      ...comment.replies.map(reply => ({
+        timestamp: reply.timestamp,
+        render: () => replyEntry(reply, comment.id)
+      })),
+      ...comment.trackedChanges.map(change => ({
+        timestamp: change.timestamp,
+        render: () => diffBlock(change)
+      }))
     ].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
     return items.map(item => item.render());
   };
@@ -105,7 +113,7 @@
     actions.append(actionButton(comment.resolved ? 'Reopen' : 'Resolve',
       () => post({ type: 'resolve', commentId: comment.id, resolved: !comment.resolved })));
     actions.append(actionButton('Go to source', () => post({ type: 'navigate', commentId: comment.id })));
-    if ((comment.trackedChanges ?? []).length > 1) {
+    if (comment.trackedChanges.length > 1) {
       actions.append(actionButton('Merge changes', () => post({ type: 'merge-tracked-changes', commentId: comment.id })));
     }
     actions.append(actionButton('Delete thread', () => post({ type: 'delete-thread', commentId: comment.id }), 'danger'));
@@ -115,8 +123,9 @@
     const reply = el('input');
     reply.placeholder = 'Reply…';
     const send = actionButton('Reply', () => {
-      if (reply.value.trim()) {
-        post({ type: 'reply', commentId: comment.id, text: reply.value.trim() });
+      const text = reply.value.trim();
+      if (text) {
+        post({ type: 'reply', commentId: comment.id, text });
       }
     });
     reply.addEventListener('keydown', event => {
@@ -124,15 +133,6 @@
     });
     replyRow.append(reply, send);
     card.append(replyRow);
-
-    for (const [index, reply] of (comment.replies ?? []).entries()) {
-      const entry = repliesBox.children[index];
-      if (entry) {
-        entry.append(actionButton('Delete',
-          () => post({ type: 'delete-reply', commentId: comment.id, replyId: reply.id }),
-          'collab-comments-link danger'));
-      }
-    }
 
     card.addEventListener('click', event => {
       if (event.target.closest('button, input, textarea')) {
@@ -183,7 +183,7 @@
     const comments = state.comments
       .filter(comment => state.showResolved || !comment.resolved)
       .sort((left, right) =>
-        (left.range?.start?.line ?? 0) - (right.range?.start?.line ?? 0));
+        left.range.start.line - right.range.start.line);
 
     const host = el('div', 'panel-cards');
     host.id = 'cards';
@@ -193,17 +193,14 @@
       return;
     }
 
-    activeCommentElement = null;
     for (const comment of comments) {
       const card = buildCard(comment);
       if (comment.id === activeCommentId) {
         card.classList.add('active');
-        activeCommentElement = card;
       }
       host.append(card);
     }
     app.append(host);
-    layoutCards();
     applyScroll();
   };
 
@@ -213,24 +210,21 @@
       state = {
         file: message.file,
         showResolved: message.showResolved,
-        comments: message.comments || []
+        comments: message.comments
       };
       render();
-      applyScroll();
     } else if (message.type === 'anchor') {
-      lastFraction = message.fraction || 0;
+      lastFraction = message.fraction;
       applyScroll();
     } else if (message.type === 'highlight') {
       activeCommentId = message.commentId;
       for (const card of document.querySelectorAll('.collab-comments-card.active')) {
         card.classList.remove('active');
       }
-      activeCommentElement = null;
       if (activeCommentId) {
         const card = document.querySelector(`[data-comment-id="${CSS.escape(activeCommentId)}"]`);
         if (card) {
           card.classList.add('active');
-          activeCommentElement = card;
           if (message.scroll !== false) {
             card.scrollIntoView({ block: 'nearest' });
           }

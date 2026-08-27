@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
-import { createHash, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
 import {
   captureAnchor,
@@ -23,10 +23,9 @@ import {
 } from './model';
 import { CommentRepository, ReloadResult } from './repository';
 import { commentInViewport, HighlightCandidate, nearestCommentAtLine, viewportFraction } from './highlight';
-import { ReviewSurface } from './reviewSurface';
 import { PanelState, WebviewSurface } from './webviewSurface';
 import { PanelRequest } from './panelProtocol';
-import { QuartoAction, QuartoBridgeState, QuartoPreviewBridge, shouldStartQuartoBridge } from './quartoBridge';
+import { QuartoAction, QuartoBridgeState, QuartoPreviewBridge } from './quartoBridge';
 import { mapRenderedSelection, sourceHash } from './quartoMapping';
 
 const SAVE_DELAY_MS = 500;
@@ -38,7 +37,6 @@ const SCROLL_SYNC_DELAY_MS = 50;
 let webviewSurface: WebviewSurface;
 let commentHighlightDecoration: vscode.TextEditorDecorationType;
 let resolvedHighlightDecoration: vscode.TextEditorDecorationType;
-const surfaces: ReviewSurface[] = [];
 let commentsTreeProvider: CommentsTreeProvider;
 let repository: CommentRepository | undefined;
 let workspaceFolder: vscode.WorkspaceFolder | undefined;
@@ -74,7 +72,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     loadPanelState,
     request => handlePanelRequest(request)
   );
-  surfaces.push(webviewSurface);
   commentHighlightDecoration = vscode.window.createTextEditorDecorationType({
     backgroundColor: 'rgba(234, 179, 8, 0.18)',
     borderRadius: '3px'
@@ -135,7 +132,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     watcher.onDidChange(() => scheduleExternalReload(), undefined, context.subscriptions);
     watcher.onDidDelete(() => scheduleExternalReload(), undefined, context.subscriptions);
     context.subscriptions.push(watcher);
-    if (shouldStartQuartoBridge(vscode.env.remoteName)) {
+    if (vscode.env.remoteName === undefined) {
       quartoBridge = new QuartoPreviewBridge(workspaceFolder.uri.fsPath, {
         state: bridgeState,
         action: bridgeAction
@@ -379,14 +376,11 @@ function rangesEqual(left: StoredRange, right: StoredRange): boolean {
 
 function buildCommentData(
   document: vscode.TextDocument,
+  filePath: string,
   range: vscode.Range,
   text: string,
   author: string
-): CommentData | undefined {
-  const filePath = relativeFilePath(document.uri);
-  if (!filePath) {
-    return undefined;
-  }
+): CommentData {
   const fullText = document.getText();
   const start = document.offsetAt(range.start);
   const end = document.offsetAt(range.end);
@@ -398,7 +392,7 @@ function buildCommentData(
     filePath,
     range: toStoredRange(range),
     ...captureAnchor(fullText, start, end),
-    documentHash: hashDocument(fullText),
+    documentHash: sourceHash(fullText),
     replies: [],
     trackedChanges: [],
     resolved: false
@@ -407,33 +401,9 @@ function buildCommentData(
 
 function commentHasMergeableTrackedChanges(comment: CommentData): boolean {
   return hasMergeableTrackedChanges(
-    comment.trackedChanges ?? [],
-    (comment.replies ?? []).map(reply => reply.timestamp)
+    comment.trackedChanges,
+    comment.replies.map(reply => reply.timestamp)
   );
-}
-
-function surfaceUpsert(comment: CommentData): void {
-  for (const surface of surfaces) {
-    surface.upsert(comment);
-  }
-}
-
-function surfaceReconfigure(commentId: string, comment: CommentData): void {
-  for (const surface of surfaces) {
-    surface.reconfigure(commentId, comment);
-  }
-}
-
-function surfaceRemove(commentId: string): void {
-  for (const surface of surfaces) {
-    surface.remove(commentId);
-  }
-}
-
-function surfaceClear(): void {
-  for (const surface of surfaces) {
-    surface.clear();
-  }
 }
 
 /**
@@ -450,13 +420,10 @@ function refreshDecorations(): void {
         if (comment.filePath !== filePath) {
           continue;
         }
-        if (comment.resolved) {
-          if (showResolvedComments) {
-            resolved.push(toVsRange(comment.range));
-          }
-        } else {
-          active.push(toVsRange(comment.range));
+        if (comment.resolved && !showResolvedComments) {
+          continue;
         }
+        (comment.resolved ? resolved : active).push(toVsRange(comment.range));
       }
     }
     editor.setDecorations(commentHighlightDecoration, active);
@@ -524,9 +491,6 @@ async function handlePanelRequest(request: PanelRequest): Promise<void> {
       return;
     }
     case 'reply': {
-      if (!await ensureStoreCurrent()) {
-        return;
-      }
       await applyStoreAction({
         type: 'reply',
         threadId: request.commentId,
@@ -536,9 +500,6 @@ async function handlePanelRequest(request: PanelRequest): Promise<void> {
       return;
     }
     case 'resolve': {
-      if (!await ensureStoreCurrent()) {
-        return;
-      }
       await applyStoreAction({
         type: 'set-resolved',
         threadId: request.commentId,
@@ -552,7 +513,7 @@ async function handlePanelRequest(request: PanelRequest): Promise<void> {
         { modal: true },
         'Delete'
       );
-      if (confirmed !== 'Delete' || !await ensureStoreCurrent()) {
+      if (confirmed !== 'Delete') {
         return;
       }
       await applyStoreAction({ type: 'delete-thread', threadId: request.commentId });
@@ -564,7 +525,7 @@ async function handlePanelRequest(request: PanelRequest): Promise<void> {
         { modal: true },
         'Delete'
       );
-      if (confirmed !== 'Delete' || !await ensureStoreCurrent()) {
+      if (confirmed !== 'Delete') {
         return;
       }
       await applyStoreAction({
@@ -583,17 +544,17 @@ async function handlePanelRequest(request: PanelRequest): Promise<void> {
         return;
       }
       const merged = collapseTrackedChangesBetweenReplies(
-        comment.trackedChanges ?? [],
-        (comment.replies ?? []).map(reply => reply.timestamp)
+        comment.trackedChanges,
+        comment.replies.map(reply => reply.timestamp)
       );
-      const removedCount = (comment.trackedChanges?.length ?? 0) - merged.length;
+      const removedCount = comment.trackedChanges.length - merged.length;
       const confirmed = await vscode.window.showWarningMessage(
         `Remove ${removedCount} intermediate tracked `
           + `change${removedCount === 1 ? '' : 's'}? Changes separated by replies will remain separate.`,
         { modal: true },
         'Merge'
       );
-      if (confirmed !== 'Merge' || !await ensureStoreCurrent()) {
+      if (confirmed !== 'Merge') {
         return;
       }
       await applyStoreAction({ type: 'merge-tracked-changes', threadId: request.commentId });
@@ -618,10 +579,15 @@ type StoreAction =
  * bridge and the review panel both route through here so guards (dirty
  * storage, external edits) and rollback behave identically everywhere.
  */
-async function applyStoreAction(action: StoreAction): Promise<void> {
+async function applyStoreAction(action: StoreAction, filePath?: string): Promise<boolean> {
+  if (!await ensureStoreCurrent()) {
+    return false;
+  }
   const snapshot = structuredClone(commentStore);
   const find = (id: string): CommentData => {
-    const comment = commentStore.comments.find(item => item.id === id);
+    const comment = commentStore.comments.find(item =>
+      item.id === id && (filePath === undefined || item.filePath === filePath)
+    );
     if (!comment) {
       throw new Error('The requested comment thread no longer exists.');
     }
@@ -633,31 +599,26 @@ async function applyStoreAction(action: StoreAction): Promise<void> {
       // A reply is a conversation boundary: later text edits must start a new
       // tracked-change run even if they occur within the typing debounce window.
       clearPendingTrackedChange(comment.id);
-      comment.replies = [...(comment.replies ?? []), {
+      comment.replies.push({
         id: randomUUID(),
         author: action.author,
         timestamp: new Date().toISOString(),
         text: action.text
-      }];
-      surfaceReconfigure(comment.id, comment);
+      });
     } else if (action.type === 'set-resolved') {
       const comment = find(action.threadId);
       comment.resolved = action.resolved;
-      surfaceReconfigure(comment.id, comment);
     } else if (action.type === 'delete-thread') {
       const comment = find(action.threadId);
       commentStore.comments = commentStore.comments.filter(item => item.id !== comment.id);
-      surfaceRemove(comment.id);
       anchorConfidence.delete(comment.id);
       clearPendingTrackedChange(comment.id);
     } else if (action.type === 'delete-reply') {
       const comment = find(action.threadId);
-      const replies = comment.replies ?? [];
-      if (!replies.some(reply => reply.id === action.replyId)) {
+      if (!comment.replies.some(reply => reply.id === action.replyId)) {
         throw new Error('The requested reply no longer exists.');
       }
-      comment.replies = replies.filter(reply => reply.id !== action.replyId);
-      surfaceReconfigure(comment.id, comment);
+      comment.replies = comment.replies.filter(reply => reply.id !== action.replyId);
     } else if (action.type === 'merge-tracked-changes') {
       const comment = find(action.threadId);
       if (!commentHasMergeableTrackedChanges(comment)) {
@@ -665,16 +626,16 @@ async function applyStoreAction(action: StoreAction): Promise<void> {
       }
       clearPendingTrackedChange(comment.id);
       comment.trackedChanges = collapseTrackedChangesBetweenReplies(
-        comment.trackedChanges ?? [],
-        (comment.replies ?? []).map(reply => reply.timestamp)
+        comment.trackedChanges,
+        comment.replies.map(reply => reply.timestamp)
       );
-      surfaceReconfigure(comment.id, comment);
     }
     if (!persistComments()) {
       // A request is not allowed to leave the UI showing a mutation that was
       // rejected because another process changed the JSON store.
       throw new Error('The comments store could not be saved without overwriting external changes.');
     }
+    return true;
   } catch (error) {
     commentStore = snapshot;
     await restoreAllThreads();
@@ -682,16 +643,14 @@ async function applyStoreAction(action: StoreAction): Promise<void> {
   }
 }
 
-function hashDocument(text: string): string {
-  return createHash('sha256').update(text).digest('hex');
+interface BridgeSource {
+  relative: string;
+  text: string;
+  hash: string;
 }
 
-function bridgeFileUri(filePath: string): vscode.Uri {
-  return vscode.Uri.file(filePath);
-}
-
-function bridgeSource(filePath: string): { uri: vscode.Uri; relative: string; text: string } {
-  const uri = bridgeFileUri(filePath);
+function bridgeSource(filePath: string): BridgeSource {
+  const uri = vscode.Uri.file(filePath);
   const relative = relativeFilePath(uri);
   if (!relative || path.extname(relative).toLowerCase() !== '.qmd') {
     throw new Error('Only QMD files in the current workspace can use preview comments.');
@@ -700,7 +659,18 @@ function bridgeSource(filePath: string): { uri: vscode.Uri; relative: string; te
   if (open?.isDirty) {
     throw new Error('Save the QMD document before changing its preview comments.');
   }
-  return { uri, relative, text: fs.readFileSync(uri.fsPath, 'utf8') };
+  const text = fs.readFileSync(uri.fsPath, 'utf8');
+  return { relative, text, hash: sourceHash(text) };
+}
+
+function buildBridgeState(source: BridgeSource): QuartoBridgeState {
+  return {
+    sourceText: source.text,
+    sourceHash: source.hash,
+    author: getPassiveAuthorName(),
+    comments: commentStore.comments.filter(comment => comment.filePath === source.relative),
+    etag: sourceHash(`${source.hash}:${JSON.stringify(commentStore)}`)
+  };
 }
 
 async function bridgeState(filePath: string): Promise<QuartoBridgeState> {
@@ -708,31 +678,28 @@ async function bridgeState(filePath: string): Promise<QuartoBridgeState> {
     throw new Error('The comments store is dirty, invalid, or changed externally.');
   }
   const source = bridgeSource(filePath);
-  return {
-    sourceText: source.text,
-    sourceHash: sourceHash(source.text),
-    author: getPassiveAuthorName(),
-    comments: commentStore.comments.filter(comment => comment.filePath === source.relative),
-    etag: hashDocument(`${sourceHash(source.text)}:${JSON.stringify(commentStore)}`)
-  };
+  return buildBridgeState(source);
 }
 
 async function bridgeAction(
   filePath: string,
   action: QuartoAction
 ): Promise<QuartoBridgeState | { status: string }> {
-  if (!await ensureStoreCurrent()) {
-    throw new Error('The comments store is dirty, invalid, or changed externally.');
-  }
   const source = bridgeSource(filePath);
   if (action.type === 'navigate') {
+    if (!await ensureStoreCurrent()) {
+      throw new Error('The comments store is dirty, invalid, or changed externally.');
+    }
     await navigateToComment(findBridgeComment(source.relative, action.threadId));
     return { status: 'navigated' };
   }
   if (action.type === 'add') {
+    if (!await ensureStoreCurrent()) {
+      throw new Error('The comments store is dirty, invalid, or changed externally.');
+    }
     const snapshot = structuredClone(commentStore);
     try {
-      if (action.sourceHash !== sourceHash(source.text)) {
+      if (action.sourceHash !== source.hash) {
         throw new Error('The preview is stale. Refresh it before adding a comment.');
       }
       const mapped = mapRenderedSelection(source.text, action.selection);
@@ -743,10 +710,9 @@ async function bridgeAction(
         id: randomUUID(), author: action.author, timestamp: new Date().toISOString(), text: action.text,
         filePath: source.relative, range: mapped.range, selectedText: mapped.selectedText,
         contextBefore: mapped.contextBefore, contextAfter: mapped.contextAfter,
-        documentHash: sourceHash(source.text), replies: [], trackedChanges: [], resolved: false
+        documentHash: source.hash, replies: [], trackedChanges: [], resolved: false
       };
       commentStore.comments.push(comment);
-      surfaceUpsert(comment);
       anchorConfidence.set(comment.id, 'exact');
       if (!persistComments()) {
         // A bridge request is not allowed to leave VS Code showing a mutation
@@ -758,10 +724,12 @@ async function bridgeAction(
       await restoreAllThreads();
       throw error;
     }
-    return bridgeState(filePath);
+    return buildBridgeState(source);
   }
-  await applyStoreAction(action);
-  return bridgeState(filePath);
+  if (!await applyStoreAction(action, source.relative)) {
+    throw new Error('The comments store is dirty, invalid, or changed externally.');
+  }
+  return buildBridgeState(source);
 }
 
 function findBridgeComment(relative: string, threadId: string): CommentData {
@@ -774,7 +742,7 @@ function findBridgeComment(relative: string, threadId: string): CommentData {
 
 function locateComment(document: vscode.TextDocument, comment: CommentData): vscode.Range {
   const text = document.getText();
-  const currentHash = hashDocument(text);
+  const currentHash = sourceHash(text);
   const located = comment.documentHash === currentHash
     ? {
       start: positionToOffset(text, comment.range.start),
@@ -794,7 +762,6 @@ function locateComment(document: vscode.TextDocument, comment: CommentData): vsc
 async function restoreAllThreads(): Promise<void> {
   const version = ++restoreVersion;
   clearAllPendingTrackedChanges();
-  surfaceClear();
   anchorConfidence.clear();
 
   for (const comment of commentStore.comments) {
@@ -811,7 +778,6 @@ async function restoreAllThreads(): Promise<void> {
         return;
       }
       locateComment(document, comment);
-      surfaceUpsert(comment);
     } catch (error) {
       anchorConfidence.set(comment.id, 'position');
       console.warn(`Could not restore comment ${comment.id} for ${comment.filePath}`, error);
@@ -848,7 +814,8 @@ function getPassiveAuthorName(): string {
 
 async function addComment(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || !isTrackableDocument(editor.document.uri)) {
+  const filePath = editor && relativeFilePath(editor.document.uri);
+  if (!editor || !filePath) {
     vscode.window.showErrorMessage('Open a file in the current workspace before adding a comment.');
     return;
   }
@@ -872,12 +839,7 @@ async function addComment(): Promise<void> {
     return;
   }
 
-  const comment = buildCommentData(editor.document, range, text.trim(), author.trim());
-  if (!comment) {
-    vscode.window.showErrorMessage('This file is outside the Comment Tracker workspace.');
-    return;
-  }
-  surfaceUpsert(comment);
+  const comment = buildCommentData(editor.document, filePath, range, text.trim(), author.trim());
   commentStore.comments.push(comment);
   anchorConfidence.set(comment.id, 'exact');
   persistComments();
@@ -890,24 +852,11 @@ async function setTreeCommentResolved(
   if (!item || item.kind !== 'comment') {
     return;
   }
-  await setCommentResolvedById(item.comment.id, requestedState);
-}
-
-async function setCommentResolvedById(
-  commentId: string | undefined,
-  requestedState: boolean
-): Promise<void> {
-  if (!await ensureStoreCurrent()) {
-    return;
-  }
-  const comment = commentStore.comments.find(item => item.id === commentId);
-  if (!comment) {
-    vscode.window.showErrorMessage('Comment data not found.');
-    return;
-  }
-  comment.resolved = requestedState;
-  surfaceReconfigure(comment.id, comment);
-  persistComments();
+  await applyStoreAction({
+    type: 'set-resolved',
+    threadId: item.comment.id,
+    resolved: requestedState
+  });
 }
 
 async function deleteComment(): Promise<void> {
@@ -939,16 +888,8 @@ async function deleteComment(): Promise<void> {
     'Delete'
   );
   if (confirmed === 'Delete') {
-    removeComment(selected.comment.id);
+    await applyStoreAction({ type: 'delete-thread', threadId: selected.comment.id });
   }
-}
-
-function removeComment(id: string): void {
-  commentStore.comments = commentStore.comments.filter(comment => comment.id !== id);
-  surfaceRemove(id);
-  anchorConfidence.delete(id);
-  clearPendingTrackedChange(id);
-  persistComments();
 }
 
 async function deleteReplyInteractive(): Promise<void> {
@@ -959,7 +900,7 @@ async function deleteReplyInteractive(): Promise<void> {
   }
   const replies = commentStore.comments
     .filter(comment => comment.filePath === filePath)
-    .flatMap(comment => (comment.replies ?? []).map(reply => ({ comment, reply })));
+    .flatMap(comment => comment.replies.map(reply => ({ comment, reply })));
   if (replies.length === 0) {
     vscode.window.showInformationMessage('No replies found in this file.');
     return;
@@ -983,10 +924,11 @@ async function deleteReplyInteractive(): Promise<void> {
   if (confirmed !== 'Delete') {
     return;
   }
-  selected.comment.replies = (selected.comment.replies ?? [])
-    .filter(reply => reply.id !== selected.reply.id);
-  surfaceReconfigure(selected.comment.id, selected.comment);
-  persistComments();
+  await applyStoreAction({
+    type: 'delete-reply',
+    threadId: selected.comment.id,
+    replyId: selected.reply.id
+  });
 }
 
 async function deleteAllComments(): Promise<void> {
@@ -1003,7 +945,6 @@ async function deleteAllComments(): Promise<void> {
     return;
   }
   commentStore = { comments: [] };
-  surfaceClear();
   anchorConfidence.clear();
   clearAllPendingTrackedChanges();
   persistComments();
@@ -1038,45 +979,33 @@ function clearAllPendingTrackedChanges(): void {
   pendingTrackedChanges.clear();
 }
 
-function finishPendingTrackedChange(commentId: string): void {
-  const pending = pendingTrackedChanges.get(commentId);
-  if (pending) {
-    pendingTrackedChanges.delete(commentId);
-    const comment = commentStore.comments.find(item => item.id === commentId);
-    if (comment) {
-      surfaceReconfigure(commentId, comment);
-      commentsTreeProvider.refresh();
-    }
-  }
-}
-
 function recordTrackedTextChange(
   comment: CommentData,
   previousText: string,
   newText: string
-): boolean {
+): void {
   if (previousText === newText) {
-    return false;
+    return;
   }
 
   const pending = pendingTrackedChanges.get(comment.id);
   if (pending) {
-    const existing = comment.trackedChanges?.find(change => change.id === pending.changeId);
+    const existing = comment.trackedChanges.find(change => change.id === pending.changeId);
     if (existing) {
       clearTimeout(pending.timeout);
       if (newText === pending.originalText) {
-        comment.trackedChanges = comment.trackedChanges?.filter(
+        comment.trackedChanges = comment.trackedChanges.filter(
           change => change.id !== pending.changeId
         );
         pendingTrackedChanges.delete(comment.id);
       } else {
         existing.newText = newText;
         pending.timeout = setTimeout(
-          () => finishPendingTrackedChange(comment.id),
+          () => pendingTrackedChanges.delete(comment.id),
           TRACKED_CHANGE_COALESCE_MS
         );
       }
-      return true;
+      return;
     }
     clearPendingTrackedChange(comment.id);
   }
@@ -1088,16 +1017,15 @@ function recordTrackedTextChange(
     previousText,
     newText
   };
-  comment.trackedChanges = [...(comment.trackedChanges ?? []), change];
+  comment.trackedChanges.push(change);
   pendingTrackedChanges.set(comment.id, {
     changeId: change.id,
     originalText: previousText,
     timeout: setTimeout(
-      () => finishPendingTrackedChange(comment.id),
+      () => pendingTrackedChanges.delete(comment.id),
       TRACKED_CHANGE_COALESCE_MS
     )
   });
-  return true;
 }
 
 function handleDocumentChange(event: vscode.TextDocumentChangeEvent): void {
@@ -1118,7 +1046,7 @@ function handleDocumentChange(event: vscode.TextDocumentChangeEvent): void {
     text: change.text
   }));
   const text = event.document.getText();
-  const currentHash = hashDocument(text);
+  const currentHash = sourceHash(text);
   let changed = false;
 
   for (const comment of comments) {
@@ -1140,12 +1068,11 @@ function handleDocumentChange(event: vscode.TextDocumentChangeEvent): void {
     comment.documentHash = currentHash;
     anchorConfidence.set(comment.id, located.confidence);
 
-    let threadContentChanged = false;
     if (located.confidence === 'context'
       || (located.confidence === 'position' && selectionWasEdited)) {
       const refreshed = captureAnchor(text, located.start, located.end);
       if (previousSelectedText !== undefined) {
-        threadContentChanged = recordTrackedTextChange(
+        recordTrackedTextChange(
           comment,
           previousSelectedText,
           refreshed.selectedText ?? ''
@@ -1156,10 +1083,6 @@ function handleDocumentChange(event: vscode.TextDocumentChangeEvent): void {
       const refreshed = captureAnchor(text, located.start, located.end);
       comment.contextBefore = refreshed.contextBefore;
       comment.contextAfter = refreshed.contextAfter;
-    }
-
-    if (threadContentChanged && !pendingTrackedChanges.has(comment.id)) {
-      surfaceReconfigure(comment.id, comment);
     }
     changed = changed
       || !rangesEqual(previousRange, newRange)
@@ -1242,7 +1165,12 @@ async function exportToMarkdown(): Promise<void> {
 
   const grouped = new Map<string, CommentData[]>();
   for (const comment of commentStore.comments) {
-    grouped.set(comment.filePath, [...(grouped.get(comment.filePath) ?? []), comment]);
+    const comments = grouped.get(comment.filePath);
+    if (comments) {
+      comments.push(comment);
+    } else {
+      grouped.set(comment.filePath, [comment]);
+    }
   }
 
   let markdown = '# Comments\n\n';
@@ -1264,11 +1192,11 @@ async function exportToMarkdown(): Promise<void> {
       }
       markdown += `\n${comment.author}: ${comment.text}\n`;
       const activity = [
-        ...(comment.replies ?? []).map(reply => ({
+        ...comment.replies.map(reply => ({
           timestamp: reply.timestamp,
           markdown: `  - ${reply.author}: ${reply.text}\n`
         })),
-        ...(comment.trackedChanges ?? []).map(change => ({
+        ...comment.trackedChanges.map(change => ({
           timestamp: change.timestamp,
           markdown: `  - ${change.author} changed selected text from `
             + `\`${JSON.stringify(change.previousText).replace(/`/g, '\\`')}\` to `
@@ -1317,11 +1245,11 @@ class CommentsTreeProvider implements vscode.TreeDataProvider<CommentTreeItem> {
       return [];
     }
     const activity = [
-      ...(element.comment.replies ?? []).map(reply => ({
+      ...element.comment.replies.map(reply => ({
         timestamp: reply.timestamp,
         item: CommentTreeItem.forReply(element.comment, reply)
       })),
-      ...(element.comment.trackedChanges ?? []).map(change => ({
+      ...element.comment.trackedChanges.map(change => ({
         timestamp: change.timestamp,
         item: CommentTreeItem.forTrackedChange(element.comment, change)
       }))

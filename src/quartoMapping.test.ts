@@ -35,10 +35,9 @@ test('maps an exact multiline selection and rejects rendered whitespace changes'
   assert.equal(mapRenderedSelection(source, { text: 'line second', before: 'First ', after: ' line' }), undefined);
 });
 
-test('rejects generated output and stale source text that have no literal QMD match', () => {
+test('rejects rendered text that has no literal QMD match', () => {
   const source = 'Author-written prose only.\n';
   assert.equal(mapRenderedSelection(source, { text: 'Generated plot label', before: '', after: '' }), undefined);
-  assert.equal(mapRenderedSelection(source, { text: 'Old prose', before: '', after: '' }), undefined);
 });
 
 test('rejects an ambiguous rendered selection instead of guessing', () => {

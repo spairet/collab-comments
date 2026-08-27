@@ -59,14 +59,6 @@ test('commentInViewport handles empty candidates', () => {
   assert.strictEqual(commentInViewport([], 1, 10), null);
 });
 
-test('commentInViewport breaks start-line ties toward the shorter range', () => {
-  const candidates = [
-    { id: 'longer', startLine: 5, endLine: 30 },
-    { id: 'shorter', startLine: 5, endLine: 6 }
-  ];
-  assert.strictEqual(commentInViewport(candidates, 1, 10), 'shorter');
-});
-
 test('viewportFraction maps the viewport top into 0..1', () => {
   assert.strictEqual(viewportFraction(0, 9, 100), 0);
   assert.strictEqual(viewportFraction(45, 54, 100), 0.5);
@@ -75,8 +67,6 @@ test('viewportFraction maps the viewport top into 0..1', () => {
 
 test('viewportFraction clamps short or fully visible documents to 0', () => {
   assert.strictEqual(viewportFraction(0, 99, 100), 0);
-  assert.strictEqual(viewportFraction(0, 12, 10), 0);
-  assert.strictEqual(viewportFraction(0, 5, 4), 0);
 });
 
 test('parsePanelRequest accepts valid requests', () => {

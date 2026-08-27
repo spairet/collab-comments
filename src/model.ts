@@ -34,9 +34,9 @@ export interface CommentData {
   contextBefore?: string;
   contextAfter?: string;
   documentHash?: string;
-  replies?: CommentReplyData[];
-  trackedChanges?: TrackedTextChangeData[];
-  resolved?: boolean;
+  replies: CommentReplyData[];
+  trackedChanges: TrackedTextChangeData[];
+  resolved: boolean;
 }
 
 export interface CommentStore {
@@ -67,47 +67,53 @@ export function collapseTrackedChanges(
   }];
 }
 
-function trackedChangeSegment(timestamp: string, replyTimestamps: string[]): number {
-  let segment = 0;
-  for (const replyTimestamp of replyTimestamps) {
-    if (replyTimestamp.localeCompare(timestamp) <= 0) {
-      segment++;
+function trackedChangeGroups(
+  changes: TrackedTextChangeData[],
+  replyTimestamps: string[]
+): TrackedTextChangeData[][] {
+  const orderedChanges = [...changes].sort((left, right) =>
+    left.timestamp.localeCompare(right.timestamp)
+  );
+  const orderedReplies = [...replyTimestamps].sort();
+  const groups: TrackedTextChangeData[][] = [];
+  let group: TrackedTextChangeData[] = [];
+  let replyIndex = 0;
+
+  for (const change of orderedChanges) {
+    while (replyIndex < orderedReplies.length
+      && orderedReplies[replyIndex].localeCompare(change.timestamp) <= 0) {
+      if (group.length > 0) {
+        groups.push(group);
+        group = [];
+      }
+      replyIndex++;
     }
+    group.push(change);
   }
-  return segment;
+  if (group.length > 0) {
+    groups.push(group);
+  }
+  return groups;
 }
 
 export function hasMergeableTrackedChanges(
   changes: TrackedTextChangeData[],
   replyTimestamps: string[]
 ): boolean {
-  const orderedReplies = [...replyTimestamps].sort();
-  const counts = new Map<number, number>();
-  for (const change of changes) {
-    const segment = trackedChangeSegment(change.timestamp, orderedReplies);
-    const count = (counts.get(segment) ?? 0) + 1;
-    if (count > 1) {
-      return true;
-    }
-    counts.set(segment, count);
-  }
-  return false;
+  return trackedChangeGroups(changes, replyTimestamps)
+    .some(group => group.length > 1);
 }
 
 export function collapseTrackedChangesBetweenReplies(
   changes: TrackedTextChangeData[],
   replyTimestamps: string[]
 ): TrackedTextChangeData[] {
-  const orderedReplies = [...replyTimestamps].sort();
-  const segments = new Map<number, TrackedTextChangeData[]>();
-  for (const change of changes) {
-    const segment = trackedChangeSegment(change.timestamp, orderedReplies);
-    segments.set(segment, [...(segments.get(segment) ?? []), change]);
-  }
-  return [...segments.values()]
-    .flatMap(collapseTrackedChanges)
-    .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+  return trackedChangeGroups(changes, replyTimestamps)
+    .flatMap(collapseTrackedChanges);
 }
+
+type LegacyCommentData = Omit<CommentData, 'replies' | 'trackedChanges' | 'resolved'>
+  & Partial<Pick<CommentData, 'replies' | 'trackedChanges' | 'resolved'>>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -138,7 +144,7 @@ function isTrackedChange(value: unknown): value is TrackedTextChangeData {
     && typeof value.newText === 'string';
 }
 
-function isComment(value: unknown): value is CommentData {
+function isComment(value: unknown): value is LegacyCommentData {
   if (!isRecord(value)
     || typeof value.id !== 'string'
     || typeof value.author !== 'string'
@@ -182,14 +188,19 @@ export function parseCommentStore(raw: string): CommentStore {
     throw new Error('Expected an object containing a valid "comments" array.');
   }
 
-  const store = value as unknown as CommentStore;
   const ids = new Set<string>();
-  for (const comment of store.comments) {
+  const comments = value.comments.map(comment => {
     if (ids.has(comment.id)) {
       throw new Error(`Duplicate comment id "${comment.id}".`);
     }
     ids.add(comment.id);
-    comment.filePath = comment.filePath.replace(/\\/g, '/');
-  }
-  return store;
+    return {
+      ...comment,
+      filePath: comment.filePath.replace(/\\/g, '/'),
+      replies: comment.replies ?? [],
+      trackedChanges: comment.trackedChanges ?? [],
+      resolved: comment.resolved ?? false
+    };
+  });
+  return { comments };
 }
