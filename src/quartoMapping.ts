@@ -29,7 +29,10 @@ function occurrences(text: string, needle: string): number[] {
       break;
     }
     result.push(index);
-    from = index + Math.max(needle.length, 1);
+    // Advance by one UTF-16 code unit so overlapping literal occurrences are
+    // scored too. Selection offsets also use UTF-16 code units, and `needle` is
+    // known non-empty by the caller, so this always makes progress.
+    from = index + 1;
   }
   return result;
 }

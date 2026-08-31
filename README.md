@@ -158,6 +158,54 @@ Set `show-resolved: true` to include resolved threads in either exported output 
 the local preview. The filter is a no-op for non-HTML formats, revealjs, and other
 non-standard outputs should not use this integration.
 
+## Word review round-trip (beta)
+
+Native Word comments are separately opt-in for DOCX output; enabling HTML `export`
+does not enable them. With Quarto/Pandoc versions that support portable comment
+spans (the automated fixtures use Quarto 1.10 / Pandoc 3.10), configure:
+
+```yaml
+filters: [collab-comments]
+collab-comments:
+  docx-comments: true
+  show-resolved: false
+```
+
+The filter writes ordinary native Word comments for conservatively mapped literal,
+single-block selections. It skips stale ranges, repeated rendered text, overlapping
+comments, formatted/structural selections it cannot preserve safely, and comments
+outside the rendered document. Word comment text is a literal, read-only flattened
+transcript of the opening comment, replies, and tracked changes; it is never parsed
+as Markdown or HTML. `show-resolved: true` includes resolved threads and marks their
+transcript as resolved. DOCX output never contains the local preview endpoint,
+capability token, or bridge descriptor.
+
+To bring a reviewed document back, save and activate the target QMD in the first
+workspace folder, then run **Comment Tracker: Import Comments from Word…** and pick
+the DOCX (it may be outside the workspace). The command reads it with `quarto pandoc
+--track-changes=all --to=json`, presents only safe new and changed candidates in a
+multi-select review list, then confirms before saving once. It refuses dirty QMD or
+comment-store state, ambiguous literal mappings, malformed comment markers,
+identity conflicts, oversized files/output, and stale source/store state.
+The current defensive limits are a 50 MiB DOCX, 20 MiB Pandoc JSON response, 500
+comments, and 32,000 characters each for a comment body or selected text.
+QMD import sources and Quarto comment stores are each limited to 20 MiB.
+
+Imports are strictly additive: new Word comments create unresolved local threads;
+an unchanged export is skipped; a changed known exported body becomes one labelled
+`Word import: <author>` reply. Repeating the same reviewed document does not add that
+reply again. Each exported Word ID binds the local thread to the exact transcript
+snapshot, so an older untouched export remains recognisable while deleting newer
+activity from a current export is treated as a Word edit. A changed-version reply is
+timestamped as a new import event after existing thread activity; a new Word thread
+retains its Word timestamp. Imports never edit QMD,
+overwrite text, delete/resolve local threads,
+or treat Word deletions as local deletions. Word-native replies and resolved state
+are currently flattened/ignored because Pandoc's portable comment representation
+does not expose a reliable relationship model; direct OOXML parsing is intentionally
+not used. Detailed safe-skip diagnostics are available in the **Comment Tracker:
+Word Import** output channel.
+
 ## Installation
 
 ### From Source

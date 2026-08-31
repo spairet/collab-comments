@@ -44,3 +44,16 @@ test('rejects an ambiguous rendered selection instead of guessing', () => {
   const source = 'target\ntarget\n';
   assert.equal(mapRenderedSelection(source, { text: 'target', before: '', after: '' }), undefined);
 });
+
+test('rejects ambiguous overlapping literal occurrences instead of choosing the first', () => {
+  const source = 'aaa';
+  assert.equal(mapRenderedSelection(source, { text: 'aa', before: '', after: '' }), undefined);
+});
+
+test('uses context to disambiguate overlapping literal occurrences', () => {
+  const source = 'aaa';
+  const mapped = mapRenderedSelection(source, { text: 'aa', before: 'a', after: '' });
+  assert.ok(mapped);
+  assert.equal(mapped.range.start.character, 1);
+  assert.equal(mapped.range.end.character, 3);
+});

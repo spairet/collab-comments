@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
 import {
@@ -27,6 +28,16 @@ import { PanelState, WebviewSurface } from './webviewSurface';
 import { PanelRequest } from './panelProtocol';
 import { QuartoAction, QuartoBridgeState, QuartoPreviewBridge } from './quartoBridge';
 import { mapRenderedSelection, sourceHash } from './quartoMapping';
+import {
+  appendSafeThreadTimestamp,
+  candidateSummary,
+  canonicalWordText,
+  extractWordComments,
+  MAX_DOCX_BYTES,
+  MAX_PANDOC_JSON_BYTES,
+  prepareWordImport,
+  WordImportCandidate
+} from './wordComments';
 
 const SAVE_DELAY_MS = 500;
 const EXTERNAL_RELOAD_DELAY_MS = 150;
@@ -48,6 +59,7 @@ let scrollSyncTimeout: NodeJS.Timeout | undefined;
 let restoreVersion = 0;
 let showResolvedComments = false;
 let quartoBridge: QuartoPreviewBridge | undefined;
+let wordImportOutput: vscode.OutputChannel;
 
 const anchorConfidence = new Map<string, LocatedAnchor['confidence']>();
 const pendingTrackedChanges = new Map<string, {
@@ -82,6 +94,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   commentsTreeProvider = new CommentsTreeProvider();
+  wordImportOutput = vscode.window.createOutputChannel('Comment Tracker: Word Import');
   await vscode.commands.executeCommand(
     'setContext',
     'commentTracker.showResolvedComments',
@@ -90,6 +103,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     commentHighlightDecoration,
     resolvedHighlightDecoration,
+    wordImportOutput,
     vscode.window.registerWebviewViewProvider(WebviewSurface.viewId, webviewSurface),
     vscode.window.registerTreeDataProvider('commentTrackerView', commentsTreeProvider),
     vscode.workspace.onDidChangeTextDocument(handleDocumentChange),
@@ -163,6 +177,7 @@ function registerCommands(): vscode.Disposable[] {
       (comment: CommentData) => navigateToComment(comment)
     ),
     vscode.commands.registerCommand('comment-tracker.exportToMarkdown', exportToMarkdown),
+    vscode.commands.registerCommand('comment-tracker.importCommentsFromWord', importCommentsFromWord),
     vscode.commands.registerCommand('comment-tracker.deleteAllComments', deleteAllComments),
     vscode.commands.registerCommand('comment-tracker.openReviewPanel', openReviewPanel),
     vscode.commands.registerCommand(
@@ -599,10 +614,14 @@ async function applyStoreAction(action: StoreAction, filePath?: string): Promise
       // A reply is a conversation boundary: later text edits must start a new
       // tracked-change run even if they occur within the typing debounce window.
       clearPendingTrackedChange(comment.id);
+      const timestamp = appendSafeThreadTimestamp(comment, new Date().toISOString());
+      if (!timestamp) {
+        throw new Error('A reply cannot be ordered safely after the existing thread timestamps.');
+      }
       comment.replies.push({
         id: randomUUID(),
         author: action.author,
-        timestamp: new Date().toISOString(),
+        timestamp,
         text: action.text
       });
     } else if (action.type === 'set-resolved') {
@@ -1010,10 +1029,15 @@ function recordTrackedTextChange(
     clearPendingTrackedChange(comment.id);
   }
 
+  const timestamp = appendSafeThreadTimestamp(comment, new Date().toISOString());
+  if (!timestamp) {
+    vscode.window.showWarningMessage('A tracked change could not be recorded safely because the thread contains an unsupported timestamp.');
+    return;
+  }
   const change: TrackedTextChangeData = {
     id: randomUUID(),
     author: getPassiveAuthorName(),
-    timestamp: new Date().toISOString(),
+    timestamp,
     previousText,
     newText
   };
@@ -1217,6 +1241,239 @@ async function exportToMarkdown(): Promise<void> {
   });
   await vscode.window.showTextDocument(document);
   vscode.window.showInformationMessage('Comments exported and copied to the clipboard.');
+}
+
+const MAX_PANDOC_STDERR_BYTES = 16 * 1024;
+const MAX_WORD_IMPORT_QMD_BYTES = 20 * 1024 * 1024;
+
+interface PandocResult {
+  stdout: string;
+  stderr: string;
+}
+
+function runQuartoPandoc(docxPath: string, cancellation: vscode.CancellationToken): Promise<PandocResult> {
+  return new Promise((resolve, reject) => {
+    const process = spawn('quarto', ['pandoc', docxPath, '--track-changes=all', '--to=json'], {
+      shell: false,
+      windowsHide: true
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let finished = false;
+    const finish = (error?: Error, result?: PandocResult): void => {
+      if (finished) {return;}
+      finished = true;
+      cancellationSubscription.dispose();
+      if (error) {reject(error);}
+      else if (result) {resolve(result);}
+    };
+    const cancellationSubscription = cancellation.onCancellationRequested(() => {
+      process.kill();
+      finish(new Error('Word import was cancelled.'));
+    });
+    process.stdout.on('data', (chunk: Buffer) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > MAX_PANDOC_JSON_BYTES) {
+        process.kill();
+        finish(new Error(`Pandoc JSON exceeds the ${MAX_PANDOC_JSON_BYTES} byte safety limit.`));
+      } else {
+        stdout.push(chunk);
+      }
+    });
+    process.stderr.on('data', (chunk: Buffer) => {
+      if (stderrBytes < MAX_PANDOC_STDERR_BYTES) {
+        const remaining = MAX_PANDOC_STDERR_BYTES - stderrBytes;
+        stderr.push(chunk.subarray(0, remaining));
+        stderrBytes += Math.min(chunk.length, remaining);
+      }
+    });
+    process.on('error', error => finish(new Error(`Could not start Quarto: ${error.message}`)));
+    process.on('close', code => {
+      const result = { stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') };
+      if (code !== 0) {
+        finish(new Error(`Quarto Pandoc failed (exit ${code ?? 'unknown'}): ${result.stderr.trim() || 'no diagnostic output'}`));
+      } else {
+        finish(undefined, result);
+      }
+    });
+  });
+}
+
+interface WordImportTarget {
+  uri: vscode.Uri;
+  filePath: string;
+  source: string;
+}
+
+function readWordImportTarget(uri: vscode.Uri): WordImportTarget | undefined {
+  const filePath = relativeFilePath(uri);
+  if (!filePath || path.extname(filePath).toLowerCase() !== '.qmd') {
+    vscode.window.showErrorMessage('The Word import target must be a QMD file in the first workspace folder.');
+    return undefined;
+  }
+  const open = vscode.workspace.textDocuments.find(document => document.uri.toString() === uri.toString());
+  if (open?.isDirty) {
+    vscode.window.showWarningMessage('Save the QMD file before importing Word comments.');
+    return undefined;
+  }
+  try {
+    const stat = fs.statSync(uri.fsPath);
+    if (!stat.isFile() || stat.size > MAX_WORD_IMPORT_QMD_BYTES) {
+      vscode.window.showErrorMessage(`The Word import target QMD must be no larger than ${MAX_WORD_IMPORT_QMD_BYTES} bytes.`);
+      return undefined;
+    }
+    const source = fs.readFileSync(uri.fsPath);
+    if (source.length > MAX_WORD_IMPORT_QMD_BYTES) {
+      vscode.window.showErrorMessage(`The Word import target QMD must be no larger than ${MAX_WORD_IMPORT_QMD_BYTES} bytes.`);
+      return undefined;
+    }
+    return { uri, filePath, source: source.toString('utf8') };
+  } catch (error) {
+    vscode.window.showErrorMessage(`Could not read the Word import target QMD file: ${String(error)}`);
+    return undefined;
+  }
+}
+
+function wordImportTarget(): WordImportTarget | undefined {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showErrorMessage('Open a saved QMD file in the first workspace folder before importing Word comments.');
+    return undefined;
+  }
+  return readWordImportTarget(editor.document.uri);
+}
+
+function describeWordCandidate(candidate: WordImportCandidate): string {
+  if (candidate.kind === 'new') {return `New · line ${candidate.comment.range.start.line + 1} · ${candidate.wordComment.author}`;}
+  if (candidate.kind === 'changed') {return `Changed · ${candidate.replyAuthor}`;}
+  return candidate.kind;
+}
+
+async function importCommentsFromWord(): Promise<void> {
+  const target = wordImportTarget();
+  if (!target || !await ensureStoreCurrent()) {return;}
+  const selected = await vscode.window.showOpenDialog({
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    filters: { word: ['docx'] },
+    openLabel: 'Import Word comments'
+  });
+  if (!selected?.[0]) {return;}
+  const docxPath = selected[0].fsPath;
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(docxPath);
+  } catch (error) {
+    vscode.window.showErrorMessage(`Could not read the selected Word document: ${String(error)}`);
+    return;
+  }
+  if (path.extname(docxPath).toLowerCase() !== '.docx' || !stat.isFile() || stat.size > MAX_DOCX_BYTES) {
+    vscode.window.showErrorMessage(`Select a readable .docx file no larger than ${MAX_DOCX_BYTES} bytes.`);
+    return;
+  }
+  let pandoc: PandocResult;
+  try {
+    pandoc = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: 'Comment Tracker: Reading Word comments',
+      cancellable: true
+    }, (_, cancellation) => runQuartoPandoc(docxPath, cancellation));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    wordImportOutput.appendLine(`Pandoc read failed: ${message}`);
+    wordImportOutput.show(true);
+    vscode.window.showErrorMessage(`Word comments were not imported: ${message}`);
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(pandoc.stdout) as unknown;
+  } catch {
+    wordImportOutput.appendLine('Pandoc returned invalid JSON; no comments were imported.');
+    wordImportOutput.show(true);
+    vscode.window.showErrorMessage('Quarto Pandoc returned invalid JSON; no comments were imported.');
+    return;
+  }
+  const importTimestamp = new Date().toISOString();
+  const extracted = extractWordComments(parsed, importTimestamp);
+  const candidates = prepareWordImport(extracted, target.source, target.filePath, commentStore, importTimestamp);
+  const previewStore = JSON.stringify(commentStore);
+  const previewSourceHash = sourceHash(target.source);
+  const summary = candidateSummary(candidates);
+  for (const candidate of candidates) {
+    if (candidate.kind === 'ambiguous' || candidate.kind === 'conflict' || candidate.kind === 'invalid') {
+      wordImportOutput.appendLine(`${candidate.kind}: ${candidate.reason}`);
+    }
+  }
+  const safe = candidates.filter((candidate): candidate is Extract<WordImportCandidate, { kind: 'new' | 'changed' }> =>
+    candidate.kind === 'new' || candidate.kind === 'changed');
+  if (safe.length === 0) {
+    vscode.window.showInformationMessage(`No Word changes to import. ${summary.unchanged} unchanged; ${summary.ambiguous + summary.conflict + summary.invalid} skipped.`);
+    if (summary.ambiguous + summary.conflict + summary.invalid > 0) {wordImportOutput.show(true);}
+    return;
+  }
+  const choices = await vscode.window.showQuickPick(safe.map(candidate => ({
+    label: describeWordCandidate(candidate),
+    description: candidate.wordComment.selectedText.slice(0, 120),
+    detail: candidate.kind === 'new' ? candidate.wordComment.text.slice(0, 240) : candidate.replyText.slice(0, 240),
+    picked: true,
+    candidate
+  })), { canPickMany: true, placeHolder: `${summary.new} new and ${summary.changed} changed comments are safe to import` });
+  if (!choices?.length) {return;}
+  const accepted = choices.map(choice => choice.candidate);
+  const acceptedSummary = candidateSummary(accepted);
+  const confirmed = await vscode.window.showWarningMessage(
+    `Import ${accepted.length} selected Word comment change${accepted.length === 1 ? '' : 's'}? This will not edit QMD source.`,
+    { modal: true },
+    'Import'
+  );
+  if (confirmed !== 'Import') {return;}
+
+  // Do not apply a preview calculated from stale source or a changed store.
+  if (!await ensureStoreCurrent()) {return;}
+  const refreshed = readWordImportTarget(target.uri);
+  if (!refreshed || refreshed.filePath !== target.filePath || sourceHash(refreshed.source) !== previewSourceHash || JSON.stringify(commentStore) !== previewStore) {
+    vscode.window.showWarningMessage('The QMD file or comments store changed during review. Import was cancelled; run it again for a fresh preview.');
+    return;
+  }
+  const next = structuredClone(commentStore);
+  for (const candidate of accepted) {
+    if (candidate.kind === 'new') {
+      next.comments.push(candidate.comment);
+    } else {
+      const existing = next.comments.find(comment => comment.id === candidate.existingId);
+      if (!existing) {
+        vscode.window.showWarningMessage('The comments store changed during review. Import was cancelled; run it again for a fresh preview.');
+        return;
+      }
+      if (existing.replies.some(reply => reply.author === candidate.replyAuthor
+        && canonicalWordText(reply.text) === canonicalWordText(candidate.replyText))) {
+        continue;
+      }
+      // Multiple Word comments may reconcile semantically to one local thread.
+      // Allocate against the evolving clone so every accepted reply remains
+      // strictly ordered and an exhausted timestamp range aborts atomically.
+      const replyTimestamp = appendSafeThreadTimestamp(existing, candidate.replyTimestamp);
+      if (!replyTimestamp) {
+        vscode.window.showWarningMessage('Word import was cancelled because the selected replies cannot be ordered safely after existing thread activity.');
+        return;
+      }
+      existing.replies.push({ id: randomUUID(), author: candidate.replyAuthor,
+        timestamp: replyTimestamp, text: candidate.replyText });
+    }
+  }
+  const previous = commentStore;
+  commentStore = next;
+  if (!persistComments()) {
+    commentStore = previous;
+    await restoreAllThreads();
+    return;
+  }
+  wordImportOutput.appendLine(`Imported ${accepted.length} selected change(s): ${acceptedSummary.new} new, ${acceptedSummary.changed} changed; ${summary.unchanged} unchanged in the reviewed document.`);
+  vscode.window.showInformationMessage(`Imported ${accepted.length} Word comment change${accepted.length === 1 ? '' : 's'}.`);
 }
 
 class CommentsTreeProvider implements vscode.TreeDataProvider<CommentTreeItem> {

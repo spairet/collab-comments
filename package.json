@@ -58,6 +58,10 @@
         "title": "Comment Tracker: Export Comments to Markdown"
       },
       {
+        "command": "comment-tracker.importCommentsFromWord",
+        "title": "Comment Tracker: Import Comments from Word…"
+      },
+      {
         "command": "comment-tracker.deleteAllComments",
         "title": "Comment Tracker: Delete All Comments"
       },
@@ -157,7 +161,7 @@
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "test": "npm run compile-tests && node --test out/anchors.test.js out/repository.test.js out/quartoMapping.test.js out/quartoBridge.test.js out/reviewPanel.test.js",
+    "test": "npm run compile-tests && node --test out/anchors.test.js out/repository.test.js out/quartoMapping.test.js out/quartoBridge.test.js out/reviewPanel.test.js out/wordComments.test.js",
     "test:quarto": "bash tests/quarto/verify.sh",
     "test:extension": "vscode-test"
   },
