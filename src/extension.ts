@@ -94,7 +94,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   commentsTreeProvider = new CommentsTreeProvider();
-  wordImportOutput = vscode.window.createOutputChannel('Comment Tracker: Word Import');
+  wordImportOutput = vscode.window.createOutputChannel('Collab Comments: Word Import');
   await vscode.commands.executeCommand(
     'setContext',
     'commentTracker.showResolvedComments',
@@ -158,7 +158,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         quartoBridge.dispose();
         quartoBridge = undefined;
         const reason = error instanceof Error ? error.message : String(error);
-        void vscode.window.showWarningMessage(`Comment Tracker Quarto preview bridge is unavailable: ${reason}`);
+        void vscode.window.showWarningMessage(`Collab Comments Quarto preview bridge is unavailable: ${reason}`);
       }
     }
   }
@@ -247,7 +247,7 @@ function uriForComment(comment: CommentData): vscode.Uri | undefined {
 
 async function ensureStoreCurrent(): Promise<boolean> {
   if (!repository) {
-    vscode.window.showErrorMessage('Open a workspace folder before using Comment Tracker.');
+    vscode.window.showErrorMessage('Open a workspace folder before using Collab Comments.');
     return false;
   }
   if (storageDocumentIsDirty()) {
@@ -288,7 +288,7 @@ function persistComments(showErrors = true): boolean {
     scheduleExternalReload(0);
     if (showErrors) {
       vscode.window.showWarningMessage(
-        'The comments JSON changed outside Comment Tracker. It was not overwritten; reloading it now.'
+        'The comments JSON changed outside Collab Comments. It was not overwritten; reloading it now.'
       );
     }
     return false;
@@ -1378,7 +1378,7 @@ async function importCommentsFromWord(): Promise<void> {
   try {
     pandoc = await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
-      title: 'Comment Tracker: Reading Word comments',
+      title: 'Collab Comments: Reading Word comments',
       cancellable: true
     }, (_, cancellation) => runQuartoPandoc(docxPath, cancellation));
   } catch (error) {

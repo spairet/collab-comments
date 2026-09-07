@@ -1,4 +1,4 @@
-# Comment Tracker Extension
+# Collab Comments
 
 A VS Code extension for collaborative commenting with author tracking, timestamps, and threaded discussions - similar to Overleaf's commenting feature.
 
@@ -59,8 +59,8 @@ A VS Code extension for collaborative commenting with author tracking, timestamp
 
 ### Viewing All Comments
 
-Run `Comment Tracker: Open Review Panel` to use VS Code's native Comments panel,
-or open the Comment Tracker activity-bar view. Select a comment to jump to its
+Run `Collab Comments: Open Review Panel` to use VS Code's native Comments panel,
+or open the Collab Comments activity-bar view. Select a comment to jump to its
 current location. Use the eye button in the Review Comments view title to show
 resolved comments; use the crossed-out eye to hide them again. Right-click a
 comment in this view to resolve or unresolve it.
@@ -70,7 +70,7 @@ comment in this view to resolve or unresolve it.
 Set your default author name to avoid being prompted every time:
 
 1. Open Settings (`Ctrl+,`)
-2. Search for "Comment Tracker"
+2. Search for "Collab Comments"
 3. Set "Default Author" to your name
 
 Or edit `settings.json`:
@@ -84,11 +84,11 @@ Or edit `settings.json`:
 
 | Command | Description |
 |---------|-------------|
-| `Comment Tracker: Add Comment` | Add a new comment at cursor position |
-| `Comment Tracker: View Comments in Current File` | List comments in the active file |
-| `Comment Tracker: Delete Comment` | Delete a comment thread from a list |
-| `Comment Tracker: Delete Reply` | Delete an individual reply from a thread |
-| `Comment Tracker: Open Review Panel` | Open VS Code's native Comments review panel |
+| `Collab Comments: Add Comment` | Add a new comment at cursor position |
+| `Collab Comments: View Comments in Current File` | List comments in the active file |
+| `Collab Comments: Delete Comment` | Delete a comment thread from a list |
+| `Delete Reply` | Delete an individual reply from a thread |
+| `Collab Comments: Open Review Panel` | Open VS Code's native Comments review panel |
 | `Show Resolved Comments` | Include resolved threads in the Review Comments view |
 | `Hide Resolved Comments` | Return the Review Comments view to unresolved threads only |
 | `Merge Tracked Changes` | Keep the oldest deletion and newest addition within each reply interval |
@@ -181,7 +181,7 @@ transcript as resolved. DOCX output never contains the local preview endpoint,
 capability token, or bridge descriptor.
 
 To bring a reviewed document back, save and activate the target QMD in the first
-workspace folder, then run **Comment Tracker: Import Comments from Word…** and pick
+workspace folder, then run **Collab Comments: Import Comments from Word…** and pick
 the DOCX (it may be outside the workspace). The command reads it with `quarto pandoc
 --track-changes=all --to=json`, presents only safe new and changed candidates in a
 multi-select review list, then confirms before saving once. It refuses dirty QMD or
@@ -203,7 +203,7 @@ overwrite text, delete/resolve local threads,
 or treat Word deletions as local deletions. Word-native replies and resolved state
 are currently flattened/ignored because Pandoc's portable comment representation
 does not expose a reliable relationship model; direct OOXML parsing is intentionally
-not used. Detailed safe-skip diagnostics are available in the **Comment Tracker:
+not used. Detailed safe-skip diagnostics are available in the **Collab Comments:
 Word Import** output channel.
 
 ## Installation

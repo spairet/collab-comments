@@ -84,7 +84,7 @@ publishing comment text in static HTML.
 Add the command:
 
 ```text
-Comment Tracker: Import Comments from Word…
+Collab Comments: Import Comments from Word…
 ```
 
 Initial workflow:
@@ -607,7 +607,7 @@ Purpose: make review of realistic threaded documents understandable and controll
 
 ### E. Improve diagnostics and usability
 
-1. Add a dedicated `Comment Tracker: Word Import` output channel.
+1. Add a dedicated `Collab Comments: Word Import` output channel.
 2. Report actionable reasons without exposing full untrusted bodies.
 3. Offer navigation to each successfully imported QMD anchor.
 4. Remember only harmless UI preferences; do not persist external DOCX paths unless

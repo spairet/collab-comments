@@ -1,8 +1,8 @@
 {
-  "name": "comment-tracker",
-  "displayName": "Comment Tracker",
+  "name": "collab-comments",
+  "displayName": "Collab Comments",
   "description": "Track comments with author and timestamp for QMD and other files",
-  "version": "0.0.2",
+  "version": "1.1.0",
   "publisher": "MichaelLydeamore",
   "repository": {
     "type": "git",
@@ -21,7 +21,7 @@
   "main": "./dist/extension.js",
   "contributes": {
     "configuration": {
-      "title": "Comment Tracker",
+      "title": "Collab Comments",
       "properties": {
         "commentTracker.defaultAuthor": {
           "type": "string",
@@ -38,15 +38,15 @@
     "commands": [
       {
         "command": "comment-tracker.addComment",
-        "title": "Comment Tracker: Add Comment"
+        "title": "Collab Comments: Add Comment"
       },
       {
         "command": "comment-tracker.viewComments",
-        "title": "Comment Tracker: View Comments in Current File"
+        "title": "Collab Comments: View Comments in Current File"
       },
       {
         "command": "comment-tracker.deleteComment",
-        "title": "Comment Tracker: Delete Comment"
+        "title": "Collab Comments: Delete Comment"
       },
       {
         "command": "comment-tracker.deleteReply",
@@ -55,19 +55,19 @@
       },
       {
         "command": "comment-tracker.exportToMarkdown",
-        "title": "Comment Tracker: Export Comments to Markdown"
+        "title": "Collab Comments: Export Comments to Markdown"
       },
       {
         "command": "comment-tracker.importCommentsFromWord",
-        "title": "Comment Tracker: Import Comments from Word…"
+        "title": "Collab Comments: Import Comments from Word…"
       },
       {
         "command": "comment-tracker.deleteAllComments",
-        "title": "Comment Tracker: Delete All Comments"
+        "title": "Collab Comments: Delete All Comments"
       },
       {
         "command": "comment-tracker.openReviewPanel",
-        "title": "Comment Tracker: Open Review Panel",
+        "title": "Collab Comments: Open Review Panel",
         "icon": "$(comment-discussion)"
       },
       {
@@ -132,7 +132,7 @@
       "activitybar": [
         {
           "id": "comment-tracker-container",
-          "title": "Comment Tracker",
+          "title": "Collab Comments",
           "icon": "$(comment-discussion)"
         }
       ]
@@ -176,6 +176,5 @@
     "typescript": "^5.3.3",
     "@vscode/test-cli": "^0.0.4",
     "@vscode/test-electron": "^2.3.8"
-  },
-  "publisher": "MichaelLydeamore"
+  }
 }
