@@ -11,7 +11,7 @@ A VS Code extension for collaborative commenting with author tracking, timestamp
 - **Merge Change History**: Collapse each uninterrupted edit sequence without merging across replies
 - **Resolve/Unresolve**: Mark comment threads as resolved when issues are addressed
 - **Delete with Confirmation**: Delete entire threads or individual replies with safety confirmations
-- **Git-friendly Storage**: Comments are saved in `.comments/collab-comments.json` only while comments exist
+- **Git-friendly Storage**: Comments are saved in `.comments/collab-comments.json` only while comments exist. A multi-root window keeps one file per workspace folder.
 - **External Edit Support**: Valid changes made directly to the JSON file are reloaded instead of overwritten
 - **Review Panel**: Use VS Code's native Comments panel for a document-review-style overview
 - **Configurable Author**: Set your default name in settings to avoid repeated prompts
@@ -95,9 +95,11 @@ Or edit `settings.json`:
 
 ## Storage
 
-Comments are stored in `.comments/collab-comments.json` at the workspace root. The
-file and its directory are not created until the first comment is added, and they
-are removed when the last comment is deleted. The JSON file contains:
+Comments are stored in `.comments/collab-comments.json` at the workspace root. In a
+multi-root window, each folder has its own file, and a comment is saved in the
+folder that contains the commented file. The file and its directory are not
+created until the first comment is added, and they are removed when the last
+comment in that folder is deleted. The JSON file contains:
 - Comment ID, text, author, and timestamp
 - File path and line range information
 - Threaded replies with their own authors and timestamps

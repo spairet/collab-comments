@@ -38,6 +38,7 @@ import {
   prepareWordImport,
   WordImportCandidate
 } from './wordComments';
+import { commentRootForFile, workspaceRelativePath } from './workspacePaths';
 
 const SAVE_DELAY_MS = 500;
 const EXTERNAL_RELOAD_DELAY_MS = 150;
@@ -45,20 +46,26 @@ const TRACKED_CHANGE_COALESCE_MS = 2_000;
 const SELECTION_SYNC_DELAY_MS = 250;
 const SCROLL_SYNC_DELAY_MS = 50;
 
+interface CommentSession {
+  folder: vscode.WorkspaceFolder;
+  repository: CommentRepository;
+  store: CommentStore;
+  saveTimeout?: NodeJS.Timeout;
+  reloadTimeout?: NodeJS.Timeout;
+  restoreVersion: number;
+}
+
 let webviewSurface: WebviewSurface;
 let commentHighlightDecoration: vscode.TextEditorDecorationType;
 let resolvedHighlightDecoration: vscode.TextEditorDecorationType;
 let commentsTreeProvider: CommentsTreeProvider;
-let repository: CommentRepository | undefined;
-let workspaceFolder: vscode.WorkspaceFolder | undefined;
-let commentStore: CommentStore = { comments: [] };
-let saveTimeout: NodeJS.Timeout | undefined;
-let reloadTimeout: NodeJS.Timeout | undefined;
+const sessions = new Map<string, CommentSession>();
+const sessionWatchers = new Map<string, vscode.FileSystemWatcher>();
 let selectionSyncTimeout: NodeJS.Timeout | undefined;
 let scrollSyncTimeout: NodeJS.Timeout | undefined;
-let restoreVersion = 0;
 let showResolvedComments = false;
 let quartoBridge: QuartoPreviewBridge | undefined;
+let quartoBridgeRoot: string | undefined;
 let wordImportOutput: vscode.OutputChannel;
 
 const anchorConfidence = new Map<string, LocatedAnchor['confidence']>();
@@ -69,14 +76,8 @@ const pendingTrackedChanges = new Map<string, {
 }>();
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (workspaceFolder) {
-    repository = new CommentRepository(workspaceFolder.uri.fsPath);
-    try {
-      commentStore = repository.loadInitial();
-    } catch (error) {
-      showStoreError('Could not load the comments file', error);
-    }
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    openSession(folder);
   }
 
   webviewSurface = new WebviewSurface(
@@ -109,11 +110,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.onDidChangeTextDocument(handleDocumentChange),
     vscode.window.onDidChangeVisibleTextEditors(() => refreshDecorations()),
     vscode.workspace.onDidSaveTextDocument((document) => {
-      if (isStorageUri(document.uri)) {
-        scheduleExternalReload(0);
+      const session = sessionForStorageUri(document.uri);
+      if (session) {
+        scheduleExternalReload(session, 0);
       }
     }),
+    vscode.workspace.onDidChangeWorkspaceFolders(event => {
+      for (const folder of event.removed) {
+        closeSession(folder);
+      }
+      for (const folder of event.added) {
+        const session = openSession(folder);
+        watchSession(context, session);
+        void restoreAllThreads(session);
+      }
+      commentsTreeProvider.refresh();
+      webviewSurface.pushState();
+      refreshDecorations();
+    }),
     vscode.window.onDidChangeActiveTextEditor(() => {
+      commentsTreeProvider.refresh();
       webviewSurface.pushState();
       refreshDecorations();
     }),
@@ -138,32 +154,135 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ...registerCommands()
   );
 
-  if (workspaceFolder && repository) {
-    const watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(workspaceFolder, '.comments/collab-comments.json')
-    );
-    watcher.onDidCreate(() => scheduleExternalReload(), undefined, context.subscriptions);
-    watcher.onDidChange(() => scheduleExternalReload(), undefined, context.subscriptions);
-    watcher.onDidDelete(() => scheduleExternalReload(), undefined, context.subscriptions);
-    context.subscriptions.push(watcher);
-    if (vscode.env.remoteName === undefined) {
-      quartoBridge = new QuartoPreviewBridge(workspaceFolder.uri.fsPath, {
-        state: bridgeState,
-        action: bridgeAction
-      });
-      try {
-        await quartoBridge.start();
-        context.subscriptions.push({ dispose: () => quartoBridge?.dispose() });
-      } catch (error) {
-        quartoBridge.dispose();
-        quartoBridge = undefined;
-        const reason = error instanceof Error ? error.message : String(error);
-        void vscode.window.showWarningMessage(`Collab Comments Quarto preview bridge is unavailable: ${reason}`);
-      }
+  for (const session of sessions.values()) {
+    watchSession(context, session);
+  }
+  const primary = primarySession();
+  if (primary && vscode.env.remoteName === undefined) {
+    quartoBridgeRoot = primary.folder.uri.toString();
+    quartoBridge = new QuartoPreviewBridge(primary.folder.uri.fsPath, {
+      state: bridgeState,
+      action: bridgeAction
+    });
+    try {
+      await quartoBridge.start();
+      context.subscriptions.push({ dispose: () => quartoBridge?.dispose() });
+    } catch (error) {
+      quartoBridge.dispose();
+      quartoBridge = undefined;
+      quartoBridgeRoot = undefined;
+      const reason = error instanceof Error ? error.message : String(error);
+      void vscode.window.showWarningMessage(`Collab Comments Quarto preview bridge is unavailable: ${reason}`);
     }
   }
 
-  await restoreAllThreads();
+  for (const session of sessions.values()) {
+    await restoreAllThreads(session);
+  }
+}
+
+function sessionKey(folder: vscode.WorkspaceFolder): string {
+  return folder.uri.toString();
+}
+
+function openSession(folder: vscode.WorkspaceFolder): CommentSession {
+  const existing = sessions.get(sessionKey(folder));
+  if (existing) {
+    return existing;
+  }
+  const repository = new CommentRepository(folder.uri.fsPath);
+  let store: CommentStore = { comments: [] };
+  try {
+    store = repository.loadInitial();
+  } catch (error) {
+    showStoreError('Could not load the comments file', error);
+  }
+  const session: CommentSession = {
+    folder,
+    repository,
+    store,
+    restoreVersion: 0
+  };
+  sessions.set(sessionKey(folder), session);
+  return session;
+}
+
+function closeSession(folder: vscode.WorkspaceFolder): void {
+  const key = sessionKey(folder);
+  const session = sessions.get(key);
+  if (!session) {
+    return;
+  }
+  if (session.saveTimeout) {
+    clearTimeout(session.saveTimeout);
+    session.saveTimeout = undefined;
+    persistComments(session, false);
+  }
+  if (session.reloadTimeout) {
+    clearTimeout(session.reloadTimeout);
+  }
+  sessionWatchers.get(key)?.dispose();
+  sessionWatchers.delete(key);
+  sessions.delete(key);
+  if (quartoBridgeRoot === key) {
+    quartoBridge?.dispose();
+    quartoBridge = undefined;
+    quartoBridgeRoot = undefined;
+  }
+}
+
+function watchSession(context: vscode.ExtensionContext, session: CommentSession): void {
+  const key = sessionKey(session.folder);
+  if (sessionWatchers.has(key)) {
+    return;
+  }
+  const watcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(session.folder, '.comments/collab-comments.json')
+  );
+  watcher.onDidCreate(() => scheduleExternalReload(session), undefined, context.subscriptions);
+  watcher.onDidChange(() => scheduleExternalReload(session), undefined, context.subscriptions);
+  watcher.onDidDelete(() => scheduleExternalReload(session), undefined, context.subscriptions);
+  context.subscriptions.push(watcher);
+  sessionWatchers.set(key, watcher);
+}
+
+function primarySession(): CommentSession | undefined {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  return folder ? sessions.get(sessionKey(folder)) : undefined;
+}
+
+function activeSession(): CommentSession | undefined {
+  const editor = vscode.window.activeTextEditor;
+  if (editor) {
+    const session = sessionForUri(editor.document.uri);
+    if (session) {
+      return session;
+    }
+  }
+  return primarySession();
+}
+
+function sessionForUri(uri: vscode.Uri): CommentSession | undefined {
+  if (uri.scheme !== 'file') {
+    return undefined;
+  }
+  const root = commentRootForFile(
+    [...sessions.values()].map(session => session.folder.uri.fsPath),
+    uri.fsPath
+  );
+  if (!root) {
+    return undefined;
+  }
+  return [...sessions.values()].find(session => path.resolve(session.folder.uri.fsPath) === root);
+}
+
+function sessionForThread(threadId: string): CommentSession | undefined {
+  for (const session of sessions.values()) {
+    if (session.store.comments.some(comment => comment.id === threadId)) {
+      return session;
+    }
+  }
+  return undefined;
 }
 
 function registerCommands(): vscode.Disposable[] {
@@ -199,65 +318,68 @@ function registerCommands(): vscode.Disposable[] {
   ];
 }
 
-function isStorageUri(uri: vscode.Uri): boolean {
-  if (!repository) {
-    return false;
-  }
-  const candidate = path.normalize(uri.fsPath);
-  const storagePath = path.normalize(repository.filePath);
+function sameStoragePath(left: string, right: string): boolean {
+  const candidate = path.normalize(left);
+  const storagePath = path.normalize(right);
   return process.platform === 'win32'
     ? candidate.toLocaleLowerCase() === storagePath.toLocaleLowerCase()
     : candidate === storagePath;
 }
 
-function storageDocumentIsDirty(): boolean {
+function sessionForStorageUri(uri: vscode.Uri): CommentSession | undefined {
+  for (const session of sessions.values()) {
+    if (sameStoragePath(uri.fsPath, session.repository.filePath)) {
+      return session;
+    }
+  }
+  return undefined;
+}
+
+function isStorageUri(uri: vscode.Uri): boolean {
+  return sessionForStorageUri(uri) !== undefined;
+}
+
+function storageDocumentIsDirty(session: CommentSession): boolean {
   return vscode.workspace.textDocuments.some(
-    (document) => isStorageUri(document.uri) && document.isDirty
+    (document) => sameStoragePath(document.uri.fsPath, session.repository.filePath) && document.isDirty
   );
 }
 
 function isTrackableDocument(uri: vscode.Uri): boolean {
   return uri.scheme === 'file'
-    && workspaceFolder !== undefined
-    && vscode.workspace.getWorkspaceFolder(uri)?.uri.toString() === workspaceFolder.uri.toString()
+    && sessionForUri(uri) !== undefined
     && !isStorageUri(uri);
 }
 
 function relativeFilePath(uri: vscode.Uri): string | undefined {
-  if (!isTrackableDocument(uri) || !workspaceFolder) {
+  const session = sessionForUri(uri);
+  if (!session || !isTrackableDocument(uri)) {
     return undefined;
   }
-  const relative = path.relative(workspaceFolder.uri.fsPath, uri.fsPath);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
-    return undefined;
-  }
-  return relative.split(path.sep).join('/');
+  return workspaceRelativePath(session.folder.uri.fsPath, uri.fsPath);
 }
 
-function uriForComment(comment: CommentData): vscode.Uri | undefined {
-  if (!workspaceFolder) {
-    return undefined;
-  }
+function uriForComment(comment: CommentData, session: CommentSession): vscode.Uri | undefined {
   const segments = comment.filePath.split(/[\\/]/).filter(Boolean);
   if (segments.length === 0 || segments.some(segment => segment === '..')) {
     return undefined;
   }
-  return vscode.Uri.joinPath(workspaceFolder.uri, ...segments);
+  return vscode.Uri.joinPath(session.folder.uri, ...segments);
 }
 
-async function ensureStoreCurrent(): Promise<boolean> {
-  if (!repository) {
+async function ensureStoreCurrent(session: CommentSession | undefined): Promise<boolean> {
+  if (!session) {
     vscode.window.showErrorMessage('Open a workspace folder before using Collab Comments.');
     return false;
   }
-  if (storageDocumentIsDirty()) {
+  if (storageDocumentIsDirty(session)) {
     vscode.window.showWarningMessage(
       'Save or discard the open comments JSON edits before changing comments in the editor.'
     );
     return false;
   }
 
-  const result = repository.reloadIfChanged();
+  const result = session.repository.reloadIfChanged();
   if (result.kind === 'failed') {
     showStoreError('Could not check the comments JSON for external changes', result.error);
     return false;
@@ -267,17 +389,17 @@ async function ensureStoreCurrent(): Promise<boolean> {
     return false;
   }
   if (result.kind === 'loaded' || result.kind === 'deleted') {
-    await applyExternalStore(result, false);
+    await applyExternalStore(session, result, false);
   }
   return true;
 }
 
-function persistComments(showErrors = true): boolean {
-  if (!repository || storageDocumentIsDirty()) {
+function persistComments(session: CommentSession, showErrors = true): boolean {
+  if (storageDocumentIsDirty(session)) {
     return false;
   }
 
-  const result = repository.save(commentStore);
+  const result = session.repository.save(session.store);
   if (result.kind === 'saved') {
     commentsTreeProvider.refresh();
     webviewSurface.pushState();
@@ -285,7 +407,7 @@ function persistComments(showErrors = true): boolean {
     return true;
   }
   if (result.kind === 'conflict') {
-    scheduleExternalReload(0);
+    scheduleExternalReload(session, 0);
     if (showErrors) {
       vscode.window.showWarningMessage(
         'The comments JSON changed outside Collab Comments. It was not overwritten; reloading it now.'
@@ -299,31 +421,31 @@ function persistComments(showErrors = true): boolean {
   return false;
 }
 
-function schedulePersist(): void {
-  if (saveTimeout) {
-    clearTimeout(saveTimeout);
+function schedulePersist(session: CommentSession): void {
+  if (session.saveTimeout) {
+    clearTimeout(session.saveTimeout);
   }
-  saveTimeout = setTimeout(() => {
-    saveTimeout = undefined;
-    persistComments(false);
+  session.saveTimeout = setTimeout(() => {
+    session.saveTimeout = undefined;
+    persistComments(session, false);
   }, SAVE_DELAY_MS);
 }
 
-function scheduleExternalReload(delay = EXTERNAL_RELOAD_DELAY_MS): void {
-  if (reloadTimeout) {
-    clearTimeout(reloadTimeout);
+function scheduleExternalReload(session: CommentSession, delay = EXTERNAL_RELOAD_DELAY_MS): void {
+  if (session.reloadTimeout) {
+    clearTimeout(session.reloadTimeout);
   }
-  reloadTimeout = setTimeout(() => {
-    reloadTimeout = undefined;
-    void reloadExternalStore();
+  session.reloadTimeout = setTimeout(() => {
+    session.reloadTimeout = undefined;
+    void reloadExternalStore(session);
   }, delay);
 }
 
-async function reloadExternalStore(): Promise<void> {
-  if (!repository || storageDocumentIsDirty()) {
+async function reloadExternalStore(session: CommentSession): Promise<void> {
+  if (!sessions.has(sessionKey(session.folder)) || storageDocumentIsDirty(session)) {
     return;
   }
-  const result = repository.reloadIfChanged();
+  const result = session.repository.reloadIfChanged();
   if (result.kind === 'unchanged') {
     return;
   }
@@ -335,19 +457,20 @@ async function reloadExternalStore(): Promise<void> {
     showStoreError('The comments JSON is invalid and has not been applied', result.error);
     return;
   }
-  await applyExternalStore(result, true);
+  await applyExternalStore(session, result, true);
 }
 
 async function applyExternalStore(
+  session: CommentSession,
   result: Extract<ReloadResult, { kind: 'loaded' | 'deleted' }>,
   notify: boolean
 ): Promise<void> {
-  if (saveTimeout) {
-    clearTimeout(saveTimeout);
-    saveTimeout = undefined;
+  if (session.saveTimeout) {
+    clearTimeout(session.saveTimeout);
+    session.saveTimeout = undefined;
   }
-  commentStore = result.store;
-  await restoreAllThreads();
+  session.store = result.store;
+  await restoreAllThreads(session);
   commentsTreeProvider.refresh();
   webviewSurface.pushState();
   refreshDecorations();
@@ -427,11 +550,12 @@ function commentHasMergeableTrackedChanges(comment: CommentData): boolean {
  */
 function refreshDecorations(): void {
   for (const editor of vscode.window.visibleTextEditors) {
+    const session = sessionForUri(editor.document.uri);
     const filePath = relativeFilePath(editor.document.uri);
     const active: vscode.Range[] = [];
     const resolved: vscode.Range[] = [];
-    if (filePath) {
-      for (const comment of commentStore.comments) {
+    if (session && filePath) {
+      for (const comment of session.store.comments) {
         if (comment.filePath !== filePath) {
           continue;
         }
@@ -448,11 +572,14 @@ function refreshDecorations(): void {
 
 function loadPanelState(): PanelState {
   const editor = vscode.window.activeTextEditor;
+  const session = editor ? sessionForUri(editor.document.uri) : undefined;
   const file = editor ? relativeFilePath(editor.document.uri) : null;
   return {
     file: file ?? null,
     showResolved: showResolvedComments,
-    comments: file ? commentStore.comments.filter(comment => comment.filePath === file) : []
+    comments: session && file
+      ? session.store.comments.filter(comment => comment.filePath === file)
+      : []
   };
 }
 
@@ -461,8 +588,12 @@ function syncPanelHighlight(editor: vscode.TextEditor): void {
   if (!filePath) {
     return;
   }
+  const session = sessionForUri(editor.document.uri);
+  if (!session) {
+    return;
+  }
   const line = editor.selection.active.line;
-  const candidates = visibleCandidates(filePath);
+  const candidates = visibleCandidates(session, filePath);
   webviewSurface.highlight(nearestCommentAtLine(candidates, line));
 }
 
@@ -480,14 +611,18 @@ function syncPanelScroll(
   if (!filePath || visibleRanges.length === 0) {
     return;
   }
+  const session = sessionForUri(editor.document.uri);
+  if (!session) {
+    return;
+  }
   const top = visibleRanges[0].start.line;
   const bottom = visibleRanges[visibleRanges.length - 1].end.line;
   webviewSurface.anchor(viewportFraction(top, bottom, editor.document.lineCount));
-  webviewSurface.highlight(commentInViewport(visibleCandidates(filePath), top, bottom), false);
+  webviewSurface.highlight(commentInViewport(visibleCandidates(session, filePath), top, bottom), false);
 }
 
-function visibleCandidates(filePath: string): HighlightCandidate[] {
-  return commentStore.comments
+function visibleCandidates(session: CommentSession, filePath: string): HighlightCandidate[] {
+  return session.store.comments
     .filter(comment => comment.filePath === filePath && (showResolvedComments || !comment.resolved))
     .map(comment => ({
       id: comment.id,
@@ -499,14 +634,19 @@ function visibleCandidates(filePath: string): HighlightCandidate[] {
 async function handlePanelRequest(request: PanelRequest): Promise<void> {
   switch (request.type) {
     case 'navigate': {
-      const comment = commentStore.comments.find(item => item.id === request.commentId);
+      const session = sessionForThread(request.commentId) ?? activeSession();
+      const comment = session?.store.comments.find(item => item.id === request.commentId);
       if (comment) {
         await navigateToComment(comment);
       }
       return;
     }
     case 'reply': {
-      await applyStoreAction({
+      const session = sessionForThread(request.commentId) ?? activeSession();
+      if (!session) {
+        return;
+      }
+      await applyStoreAction(session, {
         type: 'reply',
         threadId: request.commentId,
         author: getPassiveAuthorName(),
@@ -515,7 +655,11 @@ async function handlePanelRequest(request: PanelRequest): Promise<void> {
       return;
     }
     case 'resolve': {
-      await applyStoreAction({
+      const session = sessionForThread(request.commentId) ?? activeSession();
+      if (!session) {
+        return;
+      }
+      await applyStoreAction(session, {
         type: 'set-resolved',
         threadId: request.commentId,
         resolved: request.resolved
@@ -531,7 +675,11 @@ async function handlePanelRequest(request: PanelRequest): Promise<void> {
       if (confirmed !== 'Delete') {
         return;
       }
-      await applyStoreAction({ type: 'delete-thread', threadId: request.commentId });
+      const session = sessionForThread(request.commentId) ?? activeSession();
+      if (!session) {
+        return;
+      }
+      await applyStoreAction(session, { type: 'delete-thread', threadId: request.commentId });
       return;
     }
     case 'delete-reply': {
@@ -543,7 +691,11 @@ async function handlePanelRequest(request: PanelRequest): Promise<void> {
       if (confirmed !== 'Delete') {
         return;
       }
-      await applyStoreAction({
+      const session = sessionForThread(request.commentId) ?? activeSession();
+      if (!session) {
+        return;
+      }
+      await applyStoreAction(session, {
         type: 'delete-reply',
         threadId: request.commentId,
         replyId: request.replyId
@@ -551,7 +703,8 @@ async function handlePanelRequest(request: PanelRequest): Promise<void> {
       return;
     }
     case 'merge-tracked-changes': {
-      const comment = commentStore.comments.find(item => item.id === request.commentId);
+      const session = sessionForThread(request.commentId) ?? activeSession();
+      const comment = session?.store.comments.find(item => item.id === request.commentId);
       if (!comment || !commentHasMergeableTrackedChanges(comment)) {
         vscode.window.showInformationMessage(
           'This thread has no consecutive tracked changes to merge.'
@@ -569,10 +722,10 @@ async function handlePanelRequest(request: PanelRequest): Promise<void> {
         { modal: true },
         'Merge'
       );
-      if (confirmed !== 'Merge') {
+      if (confirmed !== 'Merge' || !session) {
         return;
       }
-      await applyStoreAction({ type: 'merge-tracked-changes', threadId: request.commentId });
+      await applyStoreAction(session, { type: 'merge-tracked-changes', threadId: request.commentId });
       return;
     }
     case 'show-resolved': {
@@ -594,13 +747,17 @@ type StoreAction =
  * bridge and the review panel both route through here so guards (dirty
  * storage, external edits) and rollback behave identically everywhere.
  */
-async function applyStoreAction(action: StoreAction, filePath?: string): Promise<boolean> {
-  if (!await ensureStoreCurrent()) {
+async function applyStoreAction(
+  session: CommentSession,
+  action: StoreAction,
+  filePath?: string
+): Promise<boolean> {
+  if (!await ensureStoreCurrent(session)) {
     return false;
   }
-  const snapshot = structuredClone(commentStore);
+  const snapshot = structuredClone(session.store);
   const find = (id: string): CommentData => {
-    const comment = commentStore.comments.find(item =>
+    const comment = session.store.comments.find(item =>
       item.id === id && (filePath === undefined || item.filePath === filePath)
     );
     if (!comment) {
@@ -629,7 +786,7 @@ async function applyStoreAction(action: StoreAction, filePath?: string): Promise
       comment.resolved = action.resolved;
     } else if (action.type === 'delete-thread') {
       const comment = find(action.threadId);
-      commentStore.comments = commentStore.comments.filter(item => item.id !== comment.id);
+      session.store.comments = session.store.comments.filter(item => item.id !== comment.id);
       anchorConfidence.delete(comment.id);
       clearPendingTrackedChange(comment.id);
     } else if (action.type === 'delete-reply') {
@@ -649,15 +806,15 @@ async function applyStoreAction(action: StoreAction, filePath?: string): Promise
         comment.replies.map(reply => reply.timestamp)
       );
     }
-    if (!persistComments()) {
+    if (!persistComments(session)) {
       // A request is not allowed to leave the UI showing a mutation that was
       // rejected because another process changed the JSON store.
       throw new Error('The comments store could not be saved without overwriting external changes.');
     }
     return true;
   } catch (error) {
-    commentStore = snapshot;
-    await restoreAllThreads();
+    session.store = snapshot;
+    await restoreAllThreads(session);
     throw error;
   }
 }
@@ -669,11 +826,17 @@ interface BridgeSource {
 }
 
 function bridgeSource(filePath: string): BridgeSource {
-  const uri = vscode.Uri.file(filePath);
-  const relative = relativeFilePath(uri);
-  if (!relative || path.extname(relative).toLowerCase() !== '.qmd') {
+  const session = primarySession();
+  const relative = session && workspaceRelativePath(session.folder.uri.fsPath, filePath);
+  const owner = commentRootForFile(
+    [...sessions.values()].map(item => item.folder.uri.fsPath),
+    filePath
+  );
+  if (!session || !relative || !owner || path.resolve(session.folder.uri.fsPath) !== owner
+    || path.extname(relative).toLowerCase() !== '.qmd') {
     throw new Error('Only QMD files in the current workspace can use preview comments.');
   }
+  const uri = vscode.Uri.file(filePath);
   const open = vscode.workspace.textDocuments.find(document => document.uri.fsPath === uri.fsPath);
   if (open?.isDirty) {
     throw new Error('Save the QMD document before changing its preview comments.');
@@ -682,41 +845,46 @@ function bridgeSource(filePath: string): BridgeSource {
   return { relative, text, hash: sourceHash(text) };
 }
 
-function buildBridgeState(source: BridgeSource): QuartoBridgeState {
+function buildBridgeState(session: CommentSession, source: BridgeSource): QuartoBridgeState {
   return {
     sourceText: source.text,
     sourceHash: source.hash,
     author: getPassiveAuthorName(),
-    comments: commentStore.comments.filter(comment => comment.filePath === source.relative),
-    etag: sourceHash(`${source.hash}:${JSON.stringify(commentStore)}`)
+    comments: session.store.comments.filter(comment => comment.filePath === source.relative),
+    etag: sourceHash(`${source.hash}:${JSON.stringify(session.store)}`)
   };
 }
 
 async function bridgeState(filePath: string): Promise<QuartoBridgeState> {
-  if (!await ensureStoreCurrent()) {
+  const session = primarySession();
+  if (!session || !await ensureStoreCurrent(session)) {
     throw new Error('The comments store is dirty, invalid, or changed externally.');
   }
   const source = bridgeSource(filePath);
-  return buildBridgeState(source);
+  return buildBridgeState(session, source);
 }
 
 async function bridgeAction(
   filePath: string,
   action: QuartoAction
 ): Promise<QuartoBridgeState | { status: string }> {
+  const session = primarySession();
+  if (!session) {
+    throw new Error('The comments store is dirty, invalid, or changed externally.');
+  }
   const source = bridgeSource(filePath);
   if (action.type === 'navigate') {
-    if (!await ensureStoreCurrent()) {
+    if (!await ensureStoreCurrent(session)) {
       throw new Error('The comments store is dirty, invalid, or changed externally.');
     }
-    await navigateToComment(findBridgeComment(source.relative, action.threadId));
+    await navigateToComment(findBridgeComment(session, source.relative, action.threadId));
     return { status: 'navigated' };
   }
   if (action.type === 'add') {
-    if (!await ensureStoreCurrent()) {
+    if (!await ensureStoreCurrent(session)) {
       throw new Error('The comments store is dirty, invalid, or changed externally.');
     }
-    const snapshot = structuredClone(commentStore);
+    const snapshot = structuredClone(session.store);
     try {
       if (action.sourceHash !== source.hash) {
         throw new Error('The preview is stale. Refresh it before adding a comment.');
@@ -731,28 +899,28 @@ async function bridgeAction(
         contextBefore: mapped.contextBefore, contextAfter: mapped.contextAfter,
         documentHash: source.hash, replies: [], trackedChanges: [], resolved: false
       };
-      commentStore.comments.push(comment);
+      session.store.comments.push(comment);
       anchorConfidence.set(comment.id, 'exact');
-      if (!persistComments()) {
+      if (!persistComments(session)) {
         // A bridge request is not allowed to leave VS Code showing a mutation
         // that was rejected because another process changed the JSON store.
         throw new Error('The comments store could not be saved without overwriting external changes.');
       }
     } catch (error) {
-      commentStore = snapshot;
-      await restoreAllThreads();
+      session.store = snapshot;
+      await restoreAllThreads(session);
       throw error;
     }
-    return buildBridgeState(source);
+    return buildBridgeState(session, source);
   }
-  if (!await applyStoreAction(action, source.relative)) {
+  if (!await applyStoreAction(session, action, source.relative)) {
     throw new Error('The comments store is dirty, invalid, or changed externally.');
   }
-  return buildBridgeState(source);
+  return buildBridgeState(session, source);
 }
 
-function findBridgeComment(relative: string, threadId: string): CommentData {
-  const comment = commentStore.comments.find(item => item.id === threadId && item.filePath === relative);
+function findBridgeComment(session: CommentSession, relative: string, threadId: string): CommentData {
+  const comment = session.store.comments.find(item => item.id === threadId && item.filePath === relative);
   if (!comment) {
     throw new Error('The requested comment thread no longer exists.');
   }
@@ -778,22 +946,24 @@ function locateComment(document: vscode.TextDocument, comment: CommentData): vsc
   return toVsRange(comment.range);
 }
 
-async function restoreAllThreads(): Promise<void> {
-  const version = ++restoreVersion;
-  clearAllPendingTrackedChanges();
-  anchorConfidence.clear();
+async function restoreAllThreads(session: CommentSession): Promise<void> {
+  const version = ++session.restoreVersion;
+  for (const comment of session.store.comments) {
+    clearPendingTrackedChange(comment.id);
+    anchorConfidence.delete(comment.id);
+  }
 
-  for (const comment of commentStore.comments) {
-    if (version !== restoreVersion) {
+  for (const comment of session.store.comments) {
+    if (version !== session.restoreVersion) {
       return;
     }
-    const uri = uriForComment(comment);
+    const uri = uriForComment(comment, session);
     if (!uri) {
       continue;
     }
     try {
       const document = await vscode.workspace.openTextDocument(uri);
-      if (version !== restoreVersion) {
+      if (version !== session.restoreVersion) {
         return;
       }
       locateComment(document, comment);
@@ -833,12 +1003,13 @@ function getPassiveAuthorName(): string {
 
 async function addComment(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
+  const session = editor ? sessionForUri(editor.document.uri) : undefined;
   const filePath = editor && relativeFilePath(editor.document.uri);
-  if (!editor || !filePath) {
+  if (!editor || !session || !filePath) {
     vscode.window.showErrorMessage('Open a file in the current workspace before adding a comment.');
     return;
   }
-  if (!await ensureStoreCurrent()) {
+  if (!await ensureStoreCurrent(session)) {
     return;
   }
 
@@ -859,9 +1030,9 @@ async function addComment(): Promise<void> {
   }
 
   const comment = buildCommentData(editor.document, filePath, range, text.trim(), author.trim());
-  commentStore.comments.push(comment);
+  session.store.comments.push(comment);
   anchorConfidence.set(comment.id, 'exact');
-  persistComments();
+  persistComments(session);
 }
 
 async function setTreeCommentResolved(
@@ -871,7 +1042,11 @@ async function setTreeCommentResolved(
   if (!item || item.kind !== 'comment') {
     return;
   }
-  await applyStoreAction({
+  const session = sessionForThread(item.comment.id) ?? activeSession();
+  if (!session) {
+    return;
+  }
+  await applyStoreAction(session, {
     type: 'set-resolved',
     threadId: item.comment.id,
     resolved: requestedState
@@ -880,12 +1055,13 @@ async function setTreeCommentResolved(
 
 async function deleteComment(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
+  const session = editor ? sessionForUri(editor.document.uri) : undefined;
   const filePath = editor ? relativeFilePath(editor.document.uri) : undefined;
-  if (!filePath || !await ensureStoreCurrent()) {
+  if (!session || !filePath || !await ensureStoreCurrent(session)) {
     vscode.window.showInformationMessage('No tracked file is currently open.');
     return;
   }
-  const comments = commentStore.comments.filter(comment => comment.filePath === filePath);
+  const comments = session.store.comments.filter(comment => comment.filePath === filePath);
   if (comments.length === 0) {
     vscode.window.showInformationMessage('No comments found for this file.');
     return;
@@ -907,17 +1083,18 @@ async function deleteComment(): Promise<void> {
     'Delete'
   );
   if (confirmed === 'Delete') {
-    await applyStoreAction({ type: 'delete-thread', threadId: selected.comment.id });
+    await applyStoreAction(session, { type: 'delete-thread', threadId: selected.comment.id });
   }
 }
 
 async function deleteReplyInteractive(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
+  const session = editor ? sessionForUri(editor.document.uri) : undefined;
   const filePath = editor ? relativeFilePath(editor.document.uri) : undefined;
-  if (!filePath || !await ensureStoreCurrent()) {
+  if (!session || !filePath || !await ensureStoreCurrent(session)) {
     return;
   }
-  const replies = commentStore.comments
+  const replies = session.store.comments
     .filter(comment => comment.filePath === filePath)
     .flatMap(comment => comment.replies.map(reply => ({ comment, reply })));
   if (replies.length === 0) {
@@ -943,7 +1120,7 @@ async function deleteReplyInteractive(): Promise<void> {
   if (confirmed !== 'Delete') {
     return;
   }
-  await applyStoreAction({
+  await applyStoreAction(session, {
     type: 'delete-reply',
     threadId: selected.comment.id,
     replyId: selected.reply.id
@@ -951,22 +1128,28 @@ async function deleteReplyInteractive(): Promise<void> {
 }
 
 async function deleteAllComments(): Promise<void> {
-  if (!await ensureStoreCurrent() || commentStore.comments.length === 0) {
+  const editor = vscode.window.activeTextEditor;
+  const session = editor ? sessionForUri(editor.document.uri) : primarySession();
+  if (!session || !await ensureStoreCurrent(session) || session.store.comments.length === 0) {
     vscode.window.showInformationMessage('There are no comments to delete.');
     return;
   }
   const confirmed = await vscode.window.showWarningMessage(
-    'Delete all comments for this workspace?',
+    sessions.size > 1
+      ? 'Delete all comments for this workspace folder?'
+      : 'Delete all comments for this workspace?',
     { modal: true },
     'Delete'
   );
   if (confirmed !== 'Delete') {
     return;
   }
-  commentStore = { comments: [] };
-  anchorConfidence.clear();
-  clearAllPendingTrackedChanges();
-  persistComments();
+  for (const comment of session.store.comments) {
+    anchorConfidence.delete(comment.id);
+    clearPendingTrackedChange(comment.id);
+  }
+  session.store = { comments: [] };
+  persistComments(session);
 }
 
 function compareStoredPositions(left: StoredPosition, right: StoredPosition): number {
@@ -1056,11 +1239,12 @@ function handleDocumentChange(event: vscode.TextDocumentChangeEvent): void {
   if (isStorageUri(event.document.uri) || event.contentChanges.length === 0) {
     return;
   }
+  const session = sessionForUri(event.document.uri);
   const filePath = relativeFilePath(event.document.uri);
-  if (!filePath) {
+  if (!session || !filePath) {
     return;
   }
-  const comments = commentStore.comments.filter(comment => comment.filePath === filePath);
+  const comments = session.store.comments.filter(comment => comment.filePath === filePath);
   if (comments.length === 0) {
     return;
   }
@@ -1115,13 +1299,17 @@ function handleDocumentChange(event: vscode.TextDocumentChangeEvent): void {
 
   if (changed) {
     commentsTreeProvider.refresh();
-    schedulePersist();
+    schedulePersist(session);
     refreshDecorations();
   }
 }
 
 async function navigateToComment(comment: CommentData): Promise<void> {
-  const uri = uriForComment(comment);
+  const session = sessionForThread(comment.id) ?? activeSession();
+  if (!session) {
+    return;
+  }
+  const uri = uriForComment(comment, session);
   if (!uri) {
     return;
   }
@@ -1138,12 +1326,13 @@ async function navigateToComment(comment: CommentData): Promise<void> {
 
 async function viewComments(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
+  const session = editor ? sessionForUri(editor.document.uri) : undefined;
   const filePath = editor ? relativeFilePath(editor.document.uri) : undefined;
-  if (!filePath) {
+  if (!session || !filePath) {
     vscode.window.showInformationMessage('No tracked file is currently open.');
     return;
   }
-  const comments = commentStore.comments.filter(comment => comment.filePath === filePath);
+  const comments = session.store.comments.filter(comment => comment.filePath === filePath);
   if (comments.length === 0) {
     vscode.window.showInformationMessage('No comments found for this file.');
     return;
@@ -1182,13 +1371,15 @@ async function setResolvedCommentsVisible(visible: boolean): Promise<void> {
 }
 
 async function exportToMarkdown(): Promise<void> {
-  if (commentStore.comments.length === 0) {
+  const editor = vscode.window.activeTextEditor;
+  const session = editor ? sessionForUri(editor.document.uri) : primarySession();
+  if (!session || session.store.comments.length === 0) {
     vscode.window.showInformationMessage('No comments to export.');
     return;
   }
 
   const grouped = new Map<string, CommentData[]>();
-  for (const comment of commentStore.comments) {
+  for (const comment of session.store.comments) {
     const comments = grouped.get(comment.filePath);
     if (comments) {
       comments.push(comment);
@@ -1202,7 +1393,7 @@ async function exportToMarkdown(): Promise<void> {
     markdown += `## ${filePath}\n\n`;
     for (const comment of comments) {
       markdown += `- [${comment.resolved ? 'x' : ' '}] Line ${comment.range.start.line + 1}`;
-      const uri = uriForComment(comment);
+      const uri = uriForComment(comment, session);
       if (uri) {
         try {
           const document = await vscode.workspace.openTextDocument(uri);
@@ -1308,7 +1499,10 @@ interface WordImportTarget {
 }
 
 function readWordImportTarget(uri: vscode.Uri): WordImportTarget | undefined {
-  const filePath = relativeFilePath(uri);
+  const session = primarySession();
+  const filePath = session && sessionForUri(uri) === session
+    ? workspaceRelativePath(session.folder.uri.fsPath, uri.fsPath)
+    : undefined;
   if (!filePath || path.extname(filePath).toLowerCase() !== '.qmd') {
     vscode.window.showErrorMessage('The Word import target must be a QMD file in the first workspace folder.');
     return undefined;
@@ -1352,8 +1546,9 @@ function describeWordCandidate(candidate: WordImportCandidate): string {
 }
 
 async function importCommentsFromWord(): Promise<void> {
+  const session = primarySession();
   const target = wordImportTarget();
-  if (!target || !await ensureStoreCurrent()) {return;}
+  if (!session || !target || !await ensureStoreCurrent(session)) {return;}
   const selected = await vscode.window.showOpenDialog({
     canSelectFiles: true,
     canSelectFolders: false,
@@ -1399,8 +1594,8 @@ async function importCommentsFromWord(): Promise<void> {
   }
   const importTimestamp = new Date().toISOString();
   const extracted = extractWordComments(parsed, importTimestamp);
-  const candidates = prepareWordImport(extracted, target.source, target.filePath, commentStore, importTimestamp);
-  const previewStore = JSON.stringify(commentStore);
+  const candidates = prepareWordImport(extracted, target.source, target.filePath, session.store, importTimestamp);
+  const previewStore = JSON.stringify(session.store);
   const previewSourceHash = sourceHash(target.source);
   const summary = candidateSummary(candidates);
   for (const candidate of candidates) {
@@ -1433,13 +1628,13 @@ async function importCommentsFromWord(): Promise<void> {
   if (confirmed !== 'Import') {return;}
 
   // Do not apply a preview calculated from stale source or a changed store.
-  if (!await ensureStoreCurrent()) {return;}
+  if (!await ensureStoreCurrent(session)) {return;}
   const refreshed = readWordImportTarget(target.uri);
-  if (!refreshed || refreshed.filePath !== target.filePath || sourceHash(refreshed.source) !== previewSourceHash || JSON.stringify(commentStore) !== previewStore) {
+  if (!refreshed || refreshed.filePath !== target.filePath || sourceHash(refreshed.source) !== previewSourceHash || JSON.stringify(session.store) !== previewStore) {
     vscode.window.showWarningMessage('The QMD file or comments store changed during review. Import was cancelled; run it again for a fresh preview.');
     return;
   }
-  const next = structuredClone(commentStore);
+  const next = structuredClone(session.store);
   for (const candidate of accepted) {
     if (candidate.kind === 'new') {
       next.comments.push(candidate.comment);
@@ -1465,11 +1660,11 @@ async function importCommentsFromWord(): Promise<void> {
         timestamp: replyTimestamp, text: candidate.replyText });
     }
   }
-  const previous = commentStore;
-  commentStore = next;
-  if (!persistComments()) {
-    commentStore = previous;
-    await restoreAllThreads();
+  const previous = session.store;
+  session.store = next;
+  if (!persistComments(session)) {
+    session.store = previous;
+    await restoreAllThreads(session);
     return;
   }
   wordImportOutput.appendLine(`Imported ${accepted.length} selected change(s): ${acceptedSummary.new} new, ${acceptedSummary.changed} changed; ${summary.unchanged} unchanged in the reviewed document.`);
@@ -1490,7 +1685,8 @@ class CommentsTreeProvider implements vscode.TreeDataProvider<CommentTreeItem> {
 
   getChildren(element?: CommentTreeItem): CommentTreeItem[] {
     if (!element) {
-      return commentStore.comments
+      const store = activeSession()?.store ?? { comments: [] };
+      return store.comments
         .filter(comment => showResolvedComments || !comment.resolved)
         .sort((left, right) =>
           left.filePath.localeCompare(right.filePath)
@@ -1598,12 +1794,16 @@ class CommentTreeItem extends vscode.TreeItem {
 }
 
 export function deactivate(): void {
-  if (saveTimeout) {
-    clearTimeout(saveTimeout);
-    persistComments(false);
-  }
-  if (reloadTimeout) {
-    clearTimeout(reloadTimeout);
+  for (const session of sessions.values()) {
+    if (session.saveTimeout) {
+      clearTimeout(session.saveTimeout);
+      session.saveTimeout = undefined;
+      persistComments(session, false);
+    }
+    if (session.reloadTimeout) {
+      clearTimeout(session.reloadTimeout);
+      session.reloadTimeout = undefined;
+    }
   }
   clearAllPendingTrackedChanges();
 }
